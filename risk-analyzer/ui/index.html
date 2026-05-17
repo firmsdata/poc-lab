@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FirmsData Risk Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-mark" aria-hidden="true">
+          <span>F</span>
+        </div>
+        <div class="brand-copy">
+          <span class="brand-name">FirmsData</span>
+          <span class="product-name">Risk Analyzer</span>
+        </div>
+      </div>
+
+      <label for="drhp-upload" class="upload-btn" id="upload-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+        Upload DRHP / RHP
+      </label>
+      <input type="file" id="drhp-upload" accept=".pdf" style="display:none;">
+    </header>
+
+    <!-- Loading overlay -->
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <p id="loading-text">Analysing document...</p>
+    </div>
+
+    <!-- Main content -->
+    <main class="main" id="main-content">
+      <!-- Empty state -->
+      <div class="empty-state" id="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+        </svg>
+        <h2>Prepare risk factors with FirmsData</h2>
+        <p>Upload a DRHP or RHP to extract risk factors and evaluate each one for disclosure quality.</p>
+        <label for="drhp-upload" class="upload-btn-large">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          Choose PDF File
+        </label>
+      </div>
+
+      <!-- Results area -->
+      <div id="results" style="display:none;">
+        <div class="results-header">
+          <div>
+            <h2 id="results-filename"></h2> <span id="stream-progress" class="badge"></span>
+            <p id="results-summary"></p>
+          </div>
+          <div class="results-legend">
+            <span class="badge badge-concern">HIGH CONCERN</span>
+            <span class="badge badge-needs">NEEDS IMPROVEMENT</span>
+            <span class="badge badge-ok">ADEQUATE</span>
+          </div>
+        </div>
+        <div id="risk-cards"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

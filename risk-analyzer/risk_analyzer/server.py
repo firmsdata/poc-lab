@@ -1,0 +1,187 @@
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from typing import List, Dict, Any
+import json
+import logging
+import shutil
+import tempfile
+from pathlib import Path
+
+from .db import get_database_url, _connect_mysql, _import_psycopg, database_kind, fetch_risks_by_document, fetch_risks_by_domain, fetch_baseline_documents_by_domain
+from .auditor import generate_audit_report, generate_comparative_audit, generate_per_risk_feedback, generate_single_risk_feedback
+from .pipeline import analyze_pdf
+
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="FirmsData Risk Analyzer API")
+
+# Allow CORS for development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def get_db_documents() -> List[Dict[str, Any]]:
+    database_url = get_database_url()
+    if not database_url:
+        raise ValueError("DATABASE_URL is not set.")
+        
+    kind = database_kind(database_url)
+    docs = []
+    
+    query = "SELECT id, company_name, document_type, ipo_year, total_risks FROM ipo_documents ORDER BY id DESC"
+    
+    if kind == "mysql":
+        conn = _connect_mysql(database_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                columns = [col[0] for col in cur.description]
+                for row in cur.fetchall():
+                    docs.append(dict(zip(columns, row)))
+        finally:
+            conn.close()
+    else:
+        psycopg = _import_psycopg()
+        with psycopg.connect(database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                columns = [col.name for col in cur.description]
+                for row in cur.fetchall():
+                    docs.append(dict(zip(columns, row)))
+                    
+    return docs
+
+@app.get("/api/documents")
+def api_get_documents():
+    try:
+        return get_db_documents()
+    except Exception as e:
+        logger.error(f"Failed to fetch documents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/audit/{document_id}")
+def api_get_audit(document_id: int):
+    # First, check if there's a cached report on disk (optional)
+    cache_file = Path(f"audit_report_{document_id}.json")
+    if cache_file.exists():
+        try:
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"Failed to read cached audit report: {e}")
+            
+    database_url = get_database_url()
+    if not database_url:
+        raise HTTPException(status_code=500, detail="Database URL not configured")
+        
+    risks = fetch_risks_by_document(database_url, document_id)
+    if not risks:
+        raise HTTPException(status_code=404, detail=f"No risks found for document ID {document_id}")
+        
+    report = generate_audit_report(risks, use_ai=True)
+    if not report:
+        raise HTTPException(status_code=500, detail="Failed to generate audit report via AI")
+        
+    # Cache the report for future use
+    try:
+        cache_file.write_text(json.dumps(report, indent=4, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to cache audit report: {e}")
+        
+    return report
+
+@app.post("/api/upload-drhp")
+async def api_upload_drhp(file: UploadFile = File(...)):
+    """
+    Accept a DRHP/RHP PDF, extract risk factors, and stream per-risk AI feedback.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+
+    import asyncio
+    async def event_generator():
+        # Save upload to a temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = Path(tmp.name)
+
+        try:
+            yield json.dumps({"type": "status", "message": f"Extracting risks from: {file.filename}..."}) + "\n"
+            
+            # 1. Extract risks (rule-based, fast)
+            logger.info(f"Extracting risks from: {file.filename}")
+            result = await asyncio.to_thread(analyze_pdf, tmp_path, use_ai=False)
+            risk_records = result.get("risk_records", [])
+            domain = result.get("metadata", {}).get("domain", "Unknown")
+
+            if not risk_records:
+                yield json.dumps({"type": "error", "message": "No risk factors could be extracted from the uploaded PDF."}) + "\n"
+                return
+
+            yield json.dumps({"type": "status", "message": "Fetching baseline standards..."}) + "\n"
+
+            # 1.5 Fetch baseline documents for this domain
+            database_url = get_database_url()
+            baseline_docs = []
+            baseline_risks = []
+            if database_url and domain and domain != "Unknown":
+                try:
+                    baseline_docs = await asyncio.to_thread(fetch_baseline_documents_by_domain, database_url, domain)
+                    baseline_risks = await asyncio.to_thread(fetch_risks_by_domain, database_url, domain)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch baseline info for domain {domain}: {e}")
+
+            # Send initial extracted metadata
+            yield json.dumps({
+                "type": "extracted",
+                "filename": file.filename,
+                "domain": domain,
+                "baseline_documents": baseline_docs,
+                "total_risks": len(risk_records)
+            }) + "\n"
+
+            # 2. Iterate and generate single-risk feedback incrementally
+            logger.info(f"Generating per-risk feedback for {len(risk_records)} risks incrementally...")
+            for i, risk in enumerate(risk_records):
+                yield json.dumps({"type": "status", "message": f"Analyzing risk {i+1} of {len(risk_records)}..."}) + "\n"
+                
+                fb = await asyncio.to_thread(generate_single_risk_feedback, risk, baseline_risks, True)
+                
+                risk_data = {
+                    "index":       i + 1,
+                    "title":       risk.get("title", ""),
+                    "description": risk.get("description", ""),
+                    "domain":      risk.get("domain", ""),
+                    "category":    risk.get("category", ""),
+                    "sub_category":risk.get("sub_category", ""),
+                    "quality":     fb.get("quality", "ADEQUATE"),
+                    "issue":       fb.get("issue"),
+                    "improvement": fb.get("improvement"),
+                }
+                yield json.dumps({"type": "risk_feedback", "risk": risk_data}) + "\n"
+
+            yield json.dumps({"type": "done", "message": "Analysis complete."}) + "\n"
+        except Exception as e:
+            logger.error(f"Error during stream generation: {e}")
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+# Serve UI static files at /static and root index explicitly
+ui_path = Path(__file__).parent.parent / "ui"
+if ui_path.exists():
+    # Mount assets (css, js) under /static so API routes are not shadowed
+    app.mount("/static", StaticFiles(directory=str(ui_path)), name="static")
+
+    @app.get("/")
+    def serve_index():
+        return FileResponse(str(ui_path / "index.html"))
+else:
+    logger.warning("UI directory not found, static files will not be served.")

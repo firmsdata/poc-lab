@@ -1,0 +1,38 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime files
+*.log
+server.log
+ingestion.log
+
+# Generated analysis outputs
+extracted_risks.json
+test_output_ai.json
+audit_report_*.json
+
+# Downloaded source documents and generated manifests
+data/raw_pdfs/
+data/manifests/
+*.pdf
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+
