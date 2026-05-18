@@ -55,6 +55,54 @@ CREATE TABLE IF NOT EXISTS risks (
     UNIQUE (document_id, order_index)
 );
 
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS knowledge_sources (
+    id                   BIGSERIAL PRIMARY KEY,
+    title                TEXT NOT NULL,
+    publisher            TEXT,
+    source_url           TEXT UNIQUE,
+    source_type          TEXT DEFAULT 'article',
+    created_at           TIMESTAMP DEFAULT NOW()
+);
+
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS kb_rules (
+    id                   BIGSERIAL PRIMARY KEY,
+    source_id            BIGINT REFERENCES knowledge_sources(id) ON DELETE SET NULL,
+    code                 TEXT UNIQUE NOT NULL,
+    title                TEXT NOT NULL,
+    category             TEXT,
+    severity             TEXT,
+    guidance             TEXT NOT NULL,
+    weak_pattern         TEXT,
+    preferred_pattern    TEXT,
+    created_at           TIMESTAMP DEFAULT NOW()
+);
+
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS kb_examples (
+    id                   BIGSERIAL PRIMARY KEY,
+    rule_id              BIGINT REFERENCES kb_rules(id) ON DELETE CASCADE,
+    weak_disclosure      TEXT,
+    improved_disclosure  TEXT,
+    created_at           TIMESTAMP DEFAULT NOW()
+);
+
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS risk_review_findings (
+    id                   BIGSERIAL PRIMARY KEY,
+    risk_id              BIGINT REFERENCES risks(id) ON DELETE CASCADE,
+    rule_id              BIGINT REFERENCES kb_rules(id) ON DELETE SET NULL,
+    severity             TEXT,
+    message              TEXT,
+    suggestion           TEXT,
+    created_at           TIMESTAMP DEFAULT NOW()
+);
+
 -- ============================================================
 -- Indexes
 -- ============================================================
@@ -71,3 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_risks_domain                  ON risks (domain);
 CREATE INDEX IF NOT EXISTS idx_risks_category                ON risks (category);
 CREATE INDEX IF NOT EXISTS idx_risks_section_name            ON risks (section_name);
 CREATE INDEX IF NOT EXISTS idx_risks_classification_method   ON risks (classification_method);
+
+-- knowledge base
+CREATE INDEX IF NOT EXISTS idx_kb_rules_category             ON kb_rules (category);
+CREATE INDEX IF NOT EXISTS idx_kb_rules_severity             ON kb_rules (severity);
+CREATE INDEX IF NOT EXISTS idx_risk_review_findings_risk_id  ON risk_review_findings (risk_id);

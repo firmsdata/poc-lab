@@ -29,7 +29,8 @@ let currentDocData = {
   baselineDocs: [],
   highCount: 0,
   needsCount: 0,
-  okCount: 0
+  okCount: 0,
+  sectionFindings: []
 };
 
 async function uploadDRHP(file) {
@@ -81,7 +82,8 @@ async function uploadDRHP(file) {
               baselineDocs: event.baseline_documents || [],
               highCount: 0,
               needsCount: 0,
-              okCount: 0
+              okCount: 0,
+              sectionFindings: event.section_findings || []
             };
             
             if (currentDocData.total === 0) {
@@ -124,7 +126,7 @@ async function uploadDRHP(file) {
 }
 
 function updateSummaryUI() {
-  const { total, domain, baselineDocs, highCount, needsCount, okCount } = currentDocData;
+  const { total, domain, baselineDocs, highCount, needsCount, okCount, sectionFindings } = currentDocData;
   let summaryHTML = `${total} risk factor${total !== 1 ? 's' : ''} extracted — ` +
     `${highCount} high concern, ${needsCount} need improvement, ${okCount} adequate.<br/>`;
     
@@ -133,6 +135,13 @@ function updateSummaryUI() {
     summaryHTML += `<strong>Baseline RHPs:</strong> ${escHtml(baselineDocs.join(', '))}`;
   } else {
     summaryHTML += `<strong>Baseline RHPs:</strong> None available`;
+  }
+
+  if (sectionFindings && sectionFindings.length > 0) {
+    summaryHTML += `<div class="section-findings">
+      <strong>Rulebook coverage:</strong>
+      ${sectionFindings.map(finding => `<span>${escHtml(finding.message || finding.title)}</span>`).join('')}
+    </div>`;
   }
 
   resultsSummary.innerHTML = summaryHTML;
@@ -184,6 +193,13 @@ function buildRiskCard(risk, index) {
       </div>`;
   }
 
+  const rulebookFindings = Array.isArray(risk.rulebook_findings) && risk.rulebook_findings.length > 0
+    ? `<div class="rulebook-block">
+        <div class="rulebook-heading">DRHP rulebook findings</div>
+        ${risk.rulebook_findings.map(buildRulebookFinding).join('')}
+      </div>`
+    : '';
+
   return `
     <div class="risk-card">
       <div class="risk-card-header">
@@ -193,10 +209,35 @@ function buildRiskCard(risk, index) {
       ${metaTags ? `<div class="risk-meta">${metaTags}</div>` : ''}
       ${desc}
       ${feedback}
+      ${rulebookFindings}
     </div>`;
 }
 
 function escHtml(str) {
   if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function buildRulebookFinding(finding) {
+  const terms = Array.isArray(finding.matched_terms) && finding.matched_terms.length > 0
+    ? `<div class="rulebook-terms">Matched: ${finding.matched_terms.map(escHtml).join(', ')}</div>`
+    : '';
+  const source = finding.source_url
+    ? `<a href="${escAttr(finding.source_url)}" target="_blank" rel="noopener">Source</a>`
+    : '';
+
+  return `
+    <div class="rulebook-finding">
+      <div class="rulebook-title">
+        <span>${escHtml(finding.title || finding.code)}</span>
+        <span class="rulebook-severity">${escHtml(finding.severity || '')}</span>
+      </div>
+      <p>${escHtml(finding.suggestion || finding.message || '')}</p>
+      ${terms}
+      ${source}
+    </div>`;
+}
+
+function escAttr(str) {
+  return escHtml(str).replace(/'/g, '&#39;');
 }

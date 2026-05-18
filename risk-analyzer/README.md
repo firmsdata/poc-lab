@@ -35,6 +35,7 @@ This project is designed to help teams answer practical drafting questions:
 - **SEBI filing collector** for building a baseline corpus of public DRHP/RHP documents.
 - **Database persistence** for PostgreSQL and MySQL.
 - **Comparative review** of uploaded drafts against domain-specific baseline risks.
+- **DRHP rulebook checks** for materiality, specificity, quantification, vague language, cross-references, and category coverage.
 - **Web UI** for uploading a DRHP/RHP and receiving per-risk feedback.
 - **Audit reports** for structural observations, disclosure gaps, and improvement suggestions.
 
@@ -50,9 +51,27 @@ flowchart LR
     G["Uploaded DRHP/RHP draft"] --> H["Upload API"]
     H --> D
     F --> I["Baseline comparison"]
-    I --> J["Risk quality feedback"]
+    L["DRHP rulebook knowledge layer"] --> J["Risk quality feedback"]
+    I --> J
     J --> K["RHP-readiness improvements"]
 ```
+
+## DRHP Rulebook Knowledge Layer
+
+The analyzer includes a structured DRHP risk-factor rulebook derived from
+practice guidance on drafting risk factors. The current rulebook is implemented
+in `risk_analyzer/knowledge_base.py` and evaluates uploaded risks for:
+
+- Materiality-led ordering
+- Issuer-specific disclosure
+- Data-backed quantification
+- Vague or promotional wording
+- Cross-references to supporting DRHP sections
+- Coverage across recurring business, regulatory, financial, technology, and external risk categories
+
+The upload API streams these findings with each risk card, and the database
+schemas include optional knowledge-base tables for storing sources, rules,
+examples, and review findings as the corpus expands.
 
 ## Repository Structure
 
@@ -201,6 +220,27 @@ The report is written as:
 
 ```text
 audit_report_109.json
+```
+
+### Debug AI Prompts
+
+Prompt logging is disabled by default because prompts can include uploaded
+DRHP/RHP text. To log the full prompts sent to Ollama:
+
+```bash
+RISK_LOG_PROMPTS=1 python main.py --serve
+```
+
+By default, prompts are appended to:
+
+```text
+prompt_debug.log
+```
+
+You can override the path:
+
+```bash
+RISK_LOG_PROMPTS=1 RISK_PROMPT_LOG_FILE=logs/prompts.log python main.py --serve
 ```
 
 ## CLI Reference

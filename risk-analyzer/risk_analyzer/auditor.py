@@ -3,10 +3,34 @@ import logging
 import os
 import urllib.request
 import urllib.error
+from pathlib import Path
+
+from .knowledge_base import get_rulebook_prompt_context
 
 logger = logging.getLogger(__name__)
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
+PROMPT_LOG_FILE = "prompt_debug.log"
+
+
+def _log_prompt(prompt_name: str, prompt: str) -> None:
+    """
+    Persist full prompts only when explicitly enabled.
+
+    Risk prompts can contain uploaded DRHP/RHP content, so this is opt-in:
+    set RISK_LOG_PROMPTS=1. Override the file with RISK_PROMPT_LOG_FILE.
+    """
+    if os.environ.get("RISK_LOG_PROMPTS", "").lower() not in {"1", "true", "yes"}:
+        return
+
+    log_path = Path(os.environ.get("RISK_PROMPT_LOG_FILE", PROMPT_LOG_FILE))
+    separator = "\n" + "=" * 88 + "\n"
+    payload = f"{separator}PROMPT: {prompt_name}\n{separator}{prompt}\n"
+    try:
+        log_path.open("a", encoding="utf-8").write(payload)
+        logger.info("Logged %s prompt to %s", prompt_name, log_path)
+    except Exception as exc:
+        logger.warning("Failed to log %s prompt: %s", prompt_name, exc)
 
 AUDIT_PROMPT_TEMPLATE = """You are a top-tier Regulatory Compliance Analyst and Risk Auditor specializing in IPO filings (DRHP/RHP) under strict regulatory frameworks.
 Your task is to analyze the following extracted risk factors for a company and generate a "Structural Assessment" report.
@@ -67,6 +91,9 @@ You MUST output your response strictly as a JSON object matching this schema exa
 
 Analyze the following risks and generate the assessment:
 {risks_text}
+
+DRHP RISK-FACTOR RULEBOOK:
+{rulebook_context}
 """
 
 def generate_audit_report(risks: list[dict], use_ai: bool = True) -> dict:
@@ -93,7 +120,12 @@ def generate_audit_report(risks: list[dict], use_ai: bool = True) -> dict:
     if len(risks_text) > 30000:
         risks_text = risks_text[:30000] + "\n...[TRUNCATED]"
 
-    prompt = AUDIT_PROMPT_TEMPLATE.replace("{risks_text}", risks_text)
+    prompt = (
+        AUDIT_PROMPT_TEMPLATE
+        .replace("{risks_text}", risks_text)
+        .replace("{rulebook_context}", get_rulebook_prompt_context())
+    )
+    _log_prompt("structural_audit", prompt)
 
     model = os.environ.get("RISK_AI_MODEL", "llama3")
 
@@ -196,6 +228,9 @@ UPLOADED_RISKS (new document being reviewed):
 
 BASELINE_RISKS (industry standard from database — for reference only, do not list all of them):
 {baseline_risks}
+
+DRHP RISK-FACTOR RULEBOOK:
+{rulebook_context}
 """
 
 
@@ -236,7 +271,9 @@ def generate_comparative_audit(
         COMPARATIVE_PROMPT_TEMPLATE
         .replace("{uploaded_risks}", uploaded_text)
         .replace("{baseline_risks}", baseline_text)
+        .replace("{rulebook_context}", get_rulebook_prompt_context())
     )
+    _log_prompt("comparative_audit", prompt)
 
     model = os.environ.get("RISK_AI_MODEL", "llama3")
     payload = {
@@ -289,6 +326,9 @@ BASELINE RISKS (For Reference):
 
 RISKS TO EVALUATE:
 {risks_json}
+
+DRHP RISK-FACTOR RULEBOOK:
+{rulebook_context}
 """
 
 
@@ -322,7 +362,13 @@ def generate_per_risk_feedback(risks: list[dict], baseline_risks: list[dict] = N
     if len(risks_json) > 20000:
         risks_json = risks_json[:20000] + "...[TRUNCATED]"
 
-    prompt = PER_RISK_PROMPT.replace("{risks_json}", risks_json).replace("{baseline_risks_text}", baseline_text)
+    prompt = (
+        PER_RISK_PROMPT
+        .replace("{risks_json}", risks_json)
+        .replace("{baseline_risks_text}", baseline_text)
+        .replace("{rulebook_context}", get_rulebook_prompt_context())
+    )
+    _log_prompt("per_risk_batch_feedback", prompt)
 
     model = os.environ.get("RISK_AI_MODEL", "llama3")
     payload = {
@@ -390,6 +436,9 @@ BASELINE RISKS (For Reference):
 
 RISK TO EVALUATE:
 {risk_json}
+
+DRHP RISK-FACTOR RULEBOOK:
+{rulebook_context}
 """
 
 def generate_single_risk_feedback(risk: dict, baseline_risks: list[dict] = None, use_ai: bool = True) -> dict:
@@ -412,7 +461,13 @@ def generate_single_risk_feedback(risk: dict, baseline_risks: list[dict] = None,
     compact = {"title": risk.get("title", ""), "description": (risk.get("description") or "")[:800]}
     risk_json = json.dumps(compact, ensure_ascii=False)
 
-    prompt = SINGLE_RISK_PROMPT.replace("{risk_json}", risk_json).replace("{baseline_risks_text}", baseline_text)
+    prompt = (
+        SINGLE_RISK_PROMPT
+        .replace("{risk_json}", risk_json)
+        .replace("{baseline_risks_text}", baseline_text)
+        .replace("{rulebook_context}", get_rulebook_prompt_context())
+    )
+    _log_prompt("single_risk_feedback", prompt)
 
     model = os.environ.get("RISK_AI_MODEL", "llama3")
     payload = {
@@ -449,4 +504,3 @@ def generate_single_risk_feedback(risk: dict, baseline_risks: list[dict] = None,
     except Exception as e:
         logger.error(f"Single risk feedback generation failed: {e}")
         return default_fb
-

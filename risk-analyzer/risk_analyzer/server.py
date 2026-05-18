@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .db import get_database_url, _connect_mysql, _import_psycopg, database_kind, fetch_risks_by_document, fetch_risks_by_domain, fetch_baseline_documents_by_domain
 from .auditor import generate_audit_report, generate_comparative_audit, generate_per_risk_feedback, generate_single_risk_feedback
+from .knowledge_base import evaluate_risk_against_rulebook, evaluate_section_coverage, get_rulebook_summary
 from .pipeline import analyze_pdf
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,13 @@ def api_get_documents():
     except Exception as e:
         logger.error(f"Failed to fetch documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/knowledge-base/drhp-rulebook")
+def api_get_drhp_rulebook():
+    return {
+        "source": "LiveLaw - The DRHP Rulebook",
+        "rules": get_rulebook_summary(),
+    }
 
 @app.get("/api/audit/{document_id}")
 def api_get_audit(document_id: int):
@@ -122,6 +130,8 @@ async def api_upload_drhp(file: UploadFile = File(...)):
                 yield json.dumps({"type": "error", "message": "No risk factors could be extracted from the uploaded PDF."}) + "\n"
                 return
 
+            section_findings = evaluate_section_coverage(risk_records)
+
             yield json.dumps({"type": "status", "message": "Fetching baseline standards..."}) + "\n"
 
             # 1.5 Fetch baseline documents for this domain
@@ -141,7 +151,9 @@ async def api_upload_drhp(file: UploadFile = File(...)):
                 "filename": file.filename,
                 "domain": domain,
                 "baseline_documents": baseline_docs,
-                "total_risks": len(risk_records)
+                "total_risks": len(risk_records),
+                "section_findings": section_findings,
+                "rulebook": get_rulebook_summary(),
             }) + "\n"
 
             # 2. Iterate and generate single-risk feedback incrementally
@@ -150,6 +162,8 @@ async def api_upload_drhp(file: UploadFile = File(...)):
                 yield json.dumps({"type": "status", "message": f"Analyzing risk {i+1} of {len(risk_records)}..."}) + "\n"
                 
                 fb = await asyncio.to_thread(generate_single_risk_feedback, risk, baseline_risks, True)
+                rulebook_findings = evaluate_risk_against_rulebook(risk)
+                fb = _merge_rulebook_feedback(fb, rulebook_findings)
                 
                 risk_data = {
                     "index":       i + 1,
@@ -161,6 +175,7 @@ async def api_upload_drhp(file: UploadFile = File(...)):
                     "quality":     fb.get("quality", "ADEQUATE"),
                     "issue":       fb.get("issue"),
                     "improvement": fb.get("improvement"),
+                    "rulebook_findings": rulebook_findings,
                 }
                 yield json.dumps({"type": "risk_feedback", "risk": risk_data}) + "\n"
 
@@ -173,6 +188,31 @@ async def api_upload_drhp(file: UploadFile = File(...)):
 
     from fastapi.responses import StreamingResponse
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+def _merge_rulebook_feedback(feedback: dict, findings: list[dict]) -> dict:
+    if not findings:
+        return feedback
+
+    merged = dict(feedback or {})
+    highest = _highest_rulebook_severity(findings)
+    current = merged.get("quality") or "ADEQUATE"
+    if current == "ADEQUATE":
+        merged["quality"] = highest
+    elif current == "NEEDS IMPROVEMENT" and highest == "HIGH CONCERN":
+        merged["quality"] = "HIGH CONCERN"
+
+    if not merged.get("issue"):
+        merged["issue"] = findings[0].get("message")
+    if not merged.get("improvement"):
+        merged["improvement"] = findings[0].get("suggestion")
+    return merged
+
+
+def _highest_rulebook_severity(findings: list[dict]) -> str:
+    if any(finding.get("severity") == "HIGH CONCERN" for finding in findings):
+        return "HIGH CONCERN"
+    return "NEEDS IMPROVEMENT"
 
 # Serve UI static files at /static and root index explicitly
 ui_path = Path(__file__).parent.parent / "ui"
