@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,10 +14,16 @@ from .db import get_database_url, _connect_mysql, _import_psycopg, database_kind
 from .auditor import generate_audit_report, generate_comparative_audit, generate_per_risk_feedback, generate_single_risk_feedback
 from .knowledge_base import evaluate_risk_against_rulebook, evaluate_section_coverage, get_rulebook_summary
 from .pipeline import analyze_pdf
+from .kb_api import router as kb_router
+from .chat_api import router as chat_router
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FirmsData Risk Analyzer API")
+
+# Routers must be included before the catch-all static mount
+app.include_router(kb_router)
+app.include_router(chat_router)
 
 # Allow CORS for development
 app.add_middleware(
@@ -30,12 +37,25 @@ def get_db_documents() -> List[Dict[str, Any]]:
     database_url = get_database_url()
     if not database_url:
         raise ValueError("DATABASE_URL is not set.")
-        
+
     kind = database_kind(database_url)
     docs = []
-    
-    query = "SELECT id, company_name, document_type, ipo_year, total_risks FROM ipo_documents ORDER BY id DESC"
-    
+
+    query = """
+        SELECT
+            d.id,
+            d.company_name,
+            d.document_type,
+            d.ipo_year,
+            COALESCE(d.total_risks, 0)  AS total_risks,
+            d.created_at,
+            MAX(r.domain)               AS domain
+        FROM ipo_documents d
+        LEFT JOIN risks r ON r.document_id = d.id
+        GROUP BY d.id, d.company_name, d.document_type, d.ipo_year, d.total_risks, d.created_at
+        ORDER BY d.id DESC
+    """
+
     if kind == "mysql":
         conn = _connect_mysql(database_url)
         try:
@@ -43,7 +63,8 @@ def get_db_documents() -> List[Dict[str, Any]]:
                 cur.execute(query)
                 columns = [col[0] for col in cur.description]
                 for row in cur.fetchall():
-                    docs.append(dict(zip(columns, row)))
+                    raw = dict(zip(columns, row))
+                    docs.append(_shape_document(raw))
         finally:
             conn.close()
     else:
@@ -53,9 +74,24 @@ def get_db_documents() -> List[Dict[str, Any]]:
                 cur.execute(query)
                 columns = [col.name for col in cur.description]
                 for row in cur.fetchall():
-                    docs.append(dict(zip(columns, row)))
-                    
+                    raw = dict(zip(columns, row))
+                    docs.append(_shape_document(raw))
+
     return docs
+
+
+def _shape_document(raw: Dict[str, Any]) -> Dict[str, Any]:
+    created = raw.get("created_at")
+    date_added = created.isoformat() if created else ""
+    return {
+        "id": str(raw["id"]),
+        "company": raw.get("company_name") or "",
+        "type": raw.get("document_type") or "DRHP",
+        "year": raw.get("ipo_year") or 0,
+        "total_risks": raw.get("total_risks") or 0,
+        "domain": raw.get("domain") or "",
+        "date_added": date_added,
+    }
 
 @app.get("/api/documents")
 def api_get_documents():
@@ -110,7 +146,6 @@ async def api_upload_drhp(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
-    import asyncio
     async def event_generator():
         # Save upload to a temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -214,14 +249,23 @@ def _highest_rulebook_severity(findings: list[dict]) -> str:
         return "HIGH CONCERN"
     return "NEEDS IMPROVEMENT"
 
-# Serve UI static files at /static and root index explicitly
-ui_path = Path(__file__).parent.parent / "ui"
-if ui_path.exists():
-    # Mount assets (css, js) under /static so API routes are not shadowed
-    app.mount("/static", StaticFiles(directory=str(ui_path)), name="static")
-
-    @app.get("/")
-    def serve_index():
-        return FileResponse(str(ui_path / "index.html"))
+# Serve the React frontend (built output).
+# The catch-all mount MUST come last so API routes are not shadowed.
+# html=True enables SPA fallback: unknown paths serve index.html.
+_frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+if _frontend_dist.exists():
+    app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="frontend")
+    logger.info(f"Serving React frontend from {_frontend_dist}")
 else:
-    logger.warning("UI directory not found, static files will not be served.")
+    # Fallback: serve the legacy vanilla UI when the React build does not exist
+    _ui_path = Path(__file__).parent.parent / "ui"
+    if _ui_path.exists():
+        app.mount("/static", StaticFiles(directory=str(_ui_path)), name="static")
+
+        @app.get("/")
+        def serve_legacy_index():
+            return FileResponse(str(_ui_path / "index.html"))
+
+        logger.warning("React build not found — serving legacy UI. Run `cd frontend && npm run build`.")
+    else:
+        logger.warning("No UI directory found. Run `cd frontend && npm run build` to build the frontend.")

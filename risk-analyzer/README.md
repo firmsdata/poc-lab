@@ -73,6 +73,119 @@ The upload API streams these findings with each risk card, and the database
 schemas include optional knowledge-base tables for storing sources, rules,
 examples, and review findings as the corpus expands.
 
+---
+
+## React Frontend (ui-revamp)
+
+The `ui-revamp` branch replaces the original vanilla HTML/JS UI (`ui/`) with a full React 19 + TypeScript application served by the same FastAPI process.
+
+### What was built
+
+| Area | Details |
+|---|---|
+| **Framework** | React 19, Vite 6, TypeScript, Tailwind CSS v4, shadcn (new-york, dark theme) |
+| **Knowledge Base page** | Live stats cards, risk quality donut chart, risks-by-category bar chart, filterable risk table with relevance heatmap, company reference table |
+| **Analysis History page** | Table of all ingested documents (company, type, year, domain, risk count, date); upload new DRHP with streamed per-risk AI feedback |
+| **Risk Detail modal** | Disclosure variants heatmap — shows how different companies worded the same risk |
+| **Company Detail modal** | Per-risk quality breakdown (Adequate / Needs Improvement / High Concern) |
+| **AI Chat panel** | Floating button (bottom-right), slides in as a drawer, grounded in KB + SEBI ICDR rulebook |
+| **Real data** | All charts and tables pull from the live DB — no hardcoded demo data when backend is connected |
+
+### New backend endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/kb/stats` | Aggregate counts |
+| `GET` | `/api/kb/domains` | Distinct domains |
+| `GET` | `/api/kb/risks` | Risks with DRHP frequency; filterable |
+| `GET` | `/api/kb/companies` | Company list with breakdown |
+| `GET` | `/api/kb/company/{name}` | Per-company risk detail |
+| `GET` | `/api/kb/disclosure-patterns` | Disclosure variant groupings |
+| `POST` | `/api/chat` | Ollama-backed AI chat |
+
+### Frontend structure
+
+```
+frontend/
+├── src/
+│   ├── pages/               # KnowledgeBasePage.tsx, AnalysisPage.tsx
+│   ├── components/
+│   │   ├── knowledge/       # FilterBar, StatsOverview, ChartsSection,
+│   │   │                    # RiskTable, CompanyTable, RiskDetailModal,
+│   │   │                    # CompanyDetailModal
+│   │   ├── analysis/        # AnalysisHistory, UploadZone, StreamingResults,
+│   │   │                    # RiskCard
+│   │   ├── layout/          # AppShell, LeftSidebar, ChatPanel
+│   │   └── ui/              # shadcn primitives
+│   ├── services/api.ts      # All API calls (falls back to mock when DB unavailable)
+│   ├── hooks/               # use-risk-stream.ts, use-chat.ts
+│   └── data/mock.ts         # Demo fallback data
+├── dist/                    # Pre-built output — served by FastAPI directly
+├── .nvmrc                   # Node 20
+└── dev.sh                   # Dev server wrapper (handles nvm)
+```
+
+### Database setup (Docker)
+
+```bash
+# Start MySQL on port 3307 (avoids conflict with default :3306)
+docker run -d \
+  --name risk-analyzer-mysql \
+  -e MYSQL_ROOT_PASSWORD=rme2024 \
+  -e MYSQL_DATABASE=risk_analyzer \
+  -p 3307:3306 \
+  mysql:8.0 \
+  --character-set-server=utf8mb4 \
+  --collation-server=utf8mb4_unicode_ci
+
+# Import corpus dump
+docker exec -i risk-analyzer-mysql mysql -uroot -prme2024 risk_analyzer \
+  < ~/Downloads/risk_analyzer.sql
+```
+
+Then set `.env`:
+```env
+DATABASE_URL=mysql://root:rme2024@localhost:3307/risk_analyzer
+```
+
+### Running (two modes)
+
+**Single process — demo/production**
+```bash
+cd poc-lab/risk-analyzer
+venv/bin/python main.py --serve
+# http://localhost:8000  — serves built React app + API
+```
+
+**Dev mode — hot reload**
+```bash
+# Terminal 1 — backend
+venv/bin/python main.py --serve
+
+# Terminal 2 — frontend (proxies /api → :8000)
+cd frontend && ./dev.sh
+# http://localhost:5173
+```
+
+### Testing the UI
+
+1. **Knowledge Base** — stats cards show real counts; filter by domain; click a risk row for disclosure variants; click a company row for quality breakdown
+2. **Analysis History** — real ingested documents appear; click **Upload DRHP** and drop a PDF to see streamed per-risk feedback
+3. **AI Chat** — requires `ollama serve` with `llama3` pulled; the rest of the app works without it
+
+### Building the frontend
+
+Only needed if you modify frontend source:
+
+```bash
+cd frontend
+nvm use 20
+npm install
+npm run build    # outputs to frontend/dist/
+```
+
+---
+
 ## Repository Structure
 
 ```text
