@@ -85,10 +85,10 @@ export async function fetchDocuments(): Promise<Document[]> {
   return fetchJSON<Document[]>(`${API_BASE}/documents`, mockDocuments)
 }
 
-export function uploadDRHP(file: File): Promise<Response> {
+export function uploadDRHP(file: File, stream: boolean = false): Promise<Response> {
   const formData = new FormData()
   formData.append("file", file)
-  return fetch(`${API_BASE}/upload-drhp`, {
+  return fetch(`${API_BASE}/upload-drhp?stream=${stream}`, {
     method: "POST",
     body: formData,
   })

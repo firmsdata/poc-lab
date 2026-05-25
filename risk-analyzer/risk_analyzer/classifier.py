@@ -155,7 +155,7 @@ def build_risk_records(
             classification = classify_risk_rule_based(title, description)
 
         records.append({
-            "domain":                 context.get("domain") or classification.get("domain"),
+            "domain":                 context.get("domain") or classification.get("domain") or "general",
             "category":               classification.get("category"),
             "sub_category":           classification.get("sub_category"),
             "risk_nature":            classification.get("risk_nature"),

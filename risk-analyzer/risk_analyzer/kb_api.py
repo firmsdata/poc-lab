@@ -69,12 +69,14 @@ def api_kb_stats():
     """Aggregate knowledge-base statistics."""
     rows = _run_query("""
         SELECT
-            COUNT(DISTINCT r.id)            AS total_risk_disclosures,
-            COUNT(DISTINCT d.id)            AS total_documents,
-            COUNT(DISTINCT r.domain)        AS domains_covered,
-            COUNT(DISTINCT d.company_name)  AS companies_referenced
-        FROM risks r
-        JOIN ipo_documents d ON d.id = r.document_id
+            (SELECT COUNT(*) FROM risks) AS total_risk_disclosures,
+            (SELECT COUNT(*) FROM ipo_documents) AS total_documents,
+            (SELECT COUNT(DISTINCT domain) FROM risks WHERE domain IS NOT NULL) AS domains_covered,
+            (
+                SELECT COUNT(DISTINCT company_name)
+                FROM ipo_documents
+                WHERE company_name IS NOT NULL AND company_name <> ''
+            ) AS companies_referenced
     """)
     if not rows or not rows[0]["total_documents"]:
         return {}

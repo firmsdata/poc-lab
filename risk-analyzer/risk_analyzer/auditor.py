@@ -27,7 +27,9 @@ def _log_prompt(prompt_name: str, prompt: str) -> None:
     separator = "\n" + "=" * 88 + "\n"
     payload = f"{separator}PROMPT: {prompt_name}\n{separator}{prompt}\n"
     try:
-        log_path.open("a", encoding="utf-8").write(payload)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(payload)
         logger.info("Logged %s prompt to %s", prompt_name, log_path)
     except Exception as exc:
         logger.warning("Failed to log %s prompt: %s", prompt_name, exc)

@@ -32,10 +32,16 @@ def resolve_pdf_paths(inputs: List[str]) -> List[Path]:
         path = Path(arg)
         if path.is_dir():
             raw.extend([p for p in sorted(path.rglob("*.pdf")) if p.stat().st_size > 0])
+        elif not path.exists():
+            raise ValueError(f"Input path not found: {arg}")
+        elif path.is_file() and path.suffix.lower() != ".pdf":
+            raise ValueError(f"Unsupported file type (only .pdf is supported): {arg}")
+        elif path.is_file() and path.stat().st_size == 0:
+            raise ValueError(f"PDF file is empty (0 bytes): {arg}")
         elif path.is_file() and path.suffix.lower() == ".pdf" and path.stat().st_size > 0:
             raw.append(path)
         else:
-            raise ValueError(f"PDF input not found or unsupported: {arg}")
+            raise ValueError(f"Unsupported or invalid input path: {arg}")
 
     # Deduplicate by resolved absolute path
     seen: set = set()

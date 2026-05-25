@@ -10,7 +10,16 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .db import get_database_url, _connect_mysql, _import_psycopg, database_kind, fetch_risks_by_document, fetch_risks_by_domain, fetch_baseline_documents_by_domain
+from .db import (
+    get_database_url,
+    _connect_mysql,
+    _import_psycopg,
+    database_kind,
+    fetch_risks_by_document,
+    fetch_risks_by_domain,
+    fetch_baseline_documents_by_domain,
+    insert_risk_records,
+)
 from .auditor import generate_audit_report, generate_comparative_audit, generate_per_risk_feedback, generate_single_risk_feedback
 from .knowledge_base import evaluate_risk_against_rulebook, evaluate_section_coverage, get_rulebook_summary
 from .pipeline import analyze_pdf
@@ -111,7 +120,9 @@ def api_get_drhp_rulebook():
 @app.get("/api/audit/{document_id}")
 def api_get_audit(document_id: int):
     # First, check if there's a cached report on disk (optional)
-    cache_file = Path(f"audit_report_{document_id}.json")
+    cache_dir = Path(__file__).parent.parent / "data" / "audit_reports"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"audit_report_{document_id}.json"
     if cache_file.exists():
         try:
             return json.loads(cache_file.read_text(encoding="utf-8"))
@@ -139,12 +150,86 @@ def api_get_audit(document_id: int):
     return report
 
 @app.post("/api/upload-drhp")
-async def api_upload_drhp(file: UploadFile = File(...)):
+async def api_upload_drhp(file: UploadFile = File(...), stream: bool = True):
     """
-    Accept a DRHP/RHP PDF, extract risk factors, and stream per-risk AI feedback.
+    Accept a DRHP/RHP PDF, extract risk factors, and stream or return per-risk AI feedback.
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+
+    if not stream:
+        # Save upload to a temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = Path(tmp.name)
+
+        try:
+            # 1. Extract risks (rule-based, fast)
+            logger.info(f"Extracting risks from: {file.filename} (non-streaming)")
+            result = await asyncio.to_thread(analyze_pdf, tmp_path, use_ai=False)
+            risk_records = result.get("risk_records", [])
+            domain = result.get("metadata", {}).get("domain", "Unknown")
+
+            if not risk_records:
+                raise HTTPException(status_code=422, detail="No risk factors could be extracted from the uploaded PDF.")
+
+            # 1.1 Persist to DB if configured
+            database_url = get_database_url()
+            if database_url:
+                try:
+                    inserted = await asyncio.to_thread(insert_risk_records, database_url, [result])
+                    logger.info(f"Persisted analysis: inserted {inserted} risk rows")
+                except Exception as e:
+                    logger.warning(f"Failed to persist analysis to DB: {e}")
+
+            section_findings = evaluate_section_coverage(risk_records)
+
+            # 1.2 Fetch baseline info
+            baseline_docs = []
+            baseline_risks = []
+            if database_url and domain and domain != "Unknown":
+                try:
+                    baseline_docs = await asyncio.to_thread(fetch_baseline_documents_by_domain, database_url, domain)
+                    baseline_risks = await asyncio.to_thread(fetch_risks_by_domain, database_url, domain)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch baseline info for domain {domain}: {e}")
+
+            # 1.3 Concurrently evaluate feedback for all risks
+            async def get_feedback_and_findings(i, risk):
+                fb = await asyncio.to_thread(generate_single_risk_feedback, risk, baseline_risks, True)
+                rulebook_findings = evaluate_risk_against_rulebook(risk)
+                fb = _merge_rulebook_feedback(fb, rulebook_findings)
+                return {
+                    "index":       i + 1,
+                    "title":       risk.get("title", ""),
+                    "description": risk.get("description", ""),
+                    "domain":      risk.get("domain", ""),
+                    "category":    risk.get("category", ""),
+                    "sub_category":risk.get("sub_category", ""),
+                    "quality":     fb.get("quality", "ADEQUATE"),
+                    "issue":       fb.get("issue"),
+                    "improvement": fb.get("improvement"),
+                    "rulebook_findings": rulebook_findings,
+                }
+
+            tasks = [get_feedback_and_findings(i, risk) for i, risk in enumerate(risk_records)]
+            risks_list = await asyncio.gather(*tasks)
+
+            return {
+                "type": "success",
+                "filename": file.filename,
+                "domain": domain,
+                "baseline_documents": baseline_docs,
+                "total_risks": len(risk_records),
+                "section_findings": section_findings,
+                "rulebook": get_rulebook_summary(),
+                "risks": risks_list
+            }
+        except Exception as e:
+            logger.error(f"Error during document analysis: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     async def event_generator():
         # Save upload to a temp file
@@ -164,6 +249,17 @@ async def api_upload_drhp(file: UploadFile = File(...)):
             if not risk_records:
                 yield json.dumps({"type": "error", "message": "No risk factors could be extracted from the uploaded PDF."}) + "\n"
                 return
+
+            # 1.1 Persist to DB if configured (run in thread to avoid blocking)
+            database_url = get_database_url()
+            if database_url:
+                try:
+                    inserted = await asyncio.to_thread(insert_risk_records, database_url, [result])
+                    logger.info(f"Persisted analysis: inserted {inserted} risk rows")
+                    yield json.dumps({"type": "status", "message": f"Saved analysis to DB ({inserted} rows)."}) + "\n"
+                except Exception as e:
+                    logger.warning(f"Failed to persist analysis to DB: {e}")
+                    yield json.dumps({"type": "status", "message": "Analysis extracted but not saved to DB."}) + "\n"
 
             section_findings = evaluate_section_coverage(risk_records)
 
@@ -199,6 +295,18 @@ async def api_upload_drhp(file: UploadFile = File(...)):
                 fb = await asyncio.to_thread(generate_single_risk_feedback, risk, baseline_risks, True)
                 rulebook_findings = evaluate_risk_against_rulebook(risk)
                 fb = _merge_rulebook_feedback(fb, rulebook_findings)
+
+                # Log the generated feedback so we can trace streaming behavior
+                try:
+                    logger.info(
+                        "Prepared feedback for risk %d/%d: title=%s quality=%s",
+                        i + 1,
+                        len(risk_records),
+                        (risk.get("title") or "")[:120],
+                        fb.get("quality") if isinstance(fb, dict) else str(fb),
+                    )
+                except Exception:
+                    logger.debug("Prepared feedback for risk (logging failed)")
                 
                 risk_data = {
                     "index":       i + 1,
@@ -212,6 +320,10 @@ async def api_upload_drhp(file: UploadFile = File(...)):
                     "improvement": fb.get("improvement"),
                     "rulebook_findings": rulebook_findings,
                 }
+                # Emit the modern stream event. The React client already
+                # supports this shape, so emitting the legacy event as well
+                # would duplicate cards.
+                logger.info("Yielding risk_feedback event for risk %d/%d", i + 1, len(risk_records))
                 yield json.dumps({"type": "risk_feedback", "risk": risk_data}) + "\n"
 
             yield json.dumps({"type": "done", "message": "Analysis complete."}) + "\n"

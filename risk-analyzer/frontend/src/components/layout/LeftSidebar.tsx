@@ -1,3 +1,4 @@
+import { useState, useEffect, type ComponentType } from "react"
 import { useLocation, Link } from "react-router-dom"
 import { BookOpen, History, BarChart3, ChevronRight } from "lucide-react"
 import {
@@ -13,7 +14,9 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from "@/components/ui/sidebar"
+import { fetchKBStats } from "@/services/api"
 import { cn } from "@/lib/utils"
+import type { KBStats } from "@/types"
 
 const navItems = [
   {
@@ -32,6 +35,16 @@ const navItems = [
 
 export function LeftSidebar() {
   const location = useLocation()
+  const [stats, setStats] = useState<KBStats | null>(null)
+  const [loadingStats, setLoadingStats] = useState(true)
+
+  useEffect(() => {
+    setLoadingStats(true)
+    fetchKBStats()
+      .then((data) => setStats(data as KBStats))
+      .catch(console.error)
+      .finally(() => setLoadingStats(false))
+  }, [])
 
   return (
     <Sidebar collapsible="offcanvas">
@@ -96,19 +109,19 @@ export function LeftSidebar() {
               <QuickStat
                 icon={BarChart3}
                 label="Risk Records"
-                value="847"
+                value={loadingStats ? "…" : (stats?.total_risk_disclosures ?? 0).toLocaleString()}
                 color="text-blue-400"
               />
               <QuickStat
                 icon={BookOpen}
                 label="Documents"
-                value="23"
+                value={loadingStats ? "…" : (stats?.total_documents ?? 0).toLocaleString()}
                 color="text-cyan-400"
               />
               <QuickStat
                 icon={History}
                 label="Companies"
-                value="7"
+                value={loadingStats ? "…" : (stats?.companies_referenced ?? 0).toLocaleString()}
                 color="text-emerald-400"
               />
             </div>
@@ -137,7 +150,7 @@ function QuickStat({
   value,
   color,
 }: {
-  icon: React.ComponentType<{ className?: string }>
+  icon: ComponentType<{ className?: string }>
   label: string
   value: string
   color: string

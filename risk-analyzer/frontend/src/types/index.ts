@@ -106,8 +106,20 @@ export type StreamedRisk = {
 
 export type StreamEvent =
   | { type: "progress"; message: string; percent: number }
-  | { type: "risk"; risk: StreamedRisk }
-  | { type: "done"; total: number }
+  | { type: "status"; message: string; percent?: number }
+  | {
+      type: "extracted"
+      filename?: string
+      domain?: string
+      baseline_documents?: string[]
+      total_risks?: number
+      section_findings?: unknown[]
+      rulebook?: unknown[]
+      message?: string
+      percent?: number
+    }
+  | { type: "risk" | "risk_feedback"; risk: StreamedRisk }
+  | { type: "done"; total?: number; message?: string }
   | { type: "error"; message: string }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────

@@ -32,14 +32,84 @@ export function useRiskStream() {
     })
 
     try {
-      const res = await uploadDRHP(file)
+      const res = await uploadDRHP(file, false)
 
       if (!res.ok) {
-        // Simulate streaming for demo
+        // Fall back to simulation if upload fails
         await simulateStream(setState)
         return
       }
 
+      const contentType = res.headers.get("content-type") || ""
+      if (contentType.includes("application/json")) {
+        const data = await res.json()
+        if (data.type === "error" || !data.risks) {
+          setState((s) => ({
+            ...s,
+            isStreaming: false,
+            error: data.message || "Failed to analyze document.",
+          }))
+          return
+        }
+
+        // Send initial extracted metadata status
+        setState((s) => ({
+          ...s,
+          progress: 30,
+          progressMessage: `Extracted ${data.total_risks} risks. Scoring...`,
+        }))
+
+        const risks = data.risks || []
+        for (let i = 0; i < risks.length; i++) {
+          await delay(80) // 80ms delay per risk card for a smooth appearing transition
+          const r = risks[i]
+          const rawRulebookFindings = Array.isArray(r.rulebook_findings)
+            ? r.rulebook_findings
+            : []
+          const rulebook_findings = rawRulebookFindings
+            .map((finding: any) => {
+              if (typeof finding === "string") return finding
+              if (finding && typeof finding === "object") {
+                return (
+                  finding.title ||
+                  finding.code ||
+                  finding.message ||
+                  JSON.stringify(finding)
+                )
+              }
+              return ""
+            })
+            .filter(Boolean)
+
+          const mapped: StreamedRisk = {
+            title: r.title || "",
+            domain: r.domain || "",
+            category: r.category || r.sub_category || "",
+            quality_rating: r.quality || r.quality_rating || "Adequate",
+            issue: r.issue || "",
+            improvement_suggestion: r.improvement || r.improvement_suggestion || "",
+            rulebook_findings,
+          }
+
+          setState((s) => ({
+            ...s,
+            progress: Math.min(30 + Math.floor(((i + 1) / risks.length) * 70), 99),
+            progressMessage: `Scoring risk ${i + 1} of ${risks.length}...`,
+            risks: [...s.risks, mapped],
+          }))
+        }
+
+        setState((s) => ({
+          ...s,
+          isStreaming: false,
+          isDone: true,
+          progress: 100,
+          progressMessage: "Analysis complete",
+        }))
+        return
+      }
+
+      // Fallback: if server still returned stream (shouldn't happen with stream=false)
       const reader = res.body?.getReader()
       if (!reader) {
         await simulateStream(setState)
@@ -68,14 +138,45 @@ export function useRiskStream() {
               risk?: StreamedRisk
               total?: number
             }
-            if (event.type === "progress") {
+            if (event.type === "progress" || event.type === "status") {
               setState((s) => ({
                 ...s,
                 progress: event.percent ?? s.progress,
                 progressMessage: event.message ?? s.progressMessage,
               }))
-            } else if (event.type === "risk" && event.risk) {
-              setState((s) => ({ ...s, risks: [...s.risks, event.risk!] }))
+            } else if ((event.type === "risk" || event.type === "risk_feedback") && event.risk) {
+              const r = event.risk as any
+              const rawRulebookFindings = Array.isArray(r.rulebook_findings)
+                ? r.rulebook_findings
+                : []
+              const rulebook_findings = rawRulebookFindings
+                .map((finding: unknown) => {
+                  if (typeof finding === "string") return finding
+                  if (finding && typeof finding === "object") {
+                    return (
+                      (finding as any).title ||
+                      (finding as any).code ||
+                      (finding as any).message ||
+                      JSON.stringify(finding)
+                    )
+                  }
+                  return ""
+                })
+                .filter(Boolean)
+
+              const mapped: StreamedRisk = {
+                title: r.title || "",
+                domain: r.domain || "",
+                category: r.category || r.sub_category || "",
+                quality_rating: r.quality || r.quality_rating || "Adequate",
+                issue: r.issue || "",
+                improvement_suggestion: r.improvement || r.improvement_suggestion || "",
+                rulebook_findings,
+              }
+              setState((s) => ({ ...s, risks: [...s.risks, mapped] }))
+            } else if (event.type === "extracted") {
+              setState((s) => ({ ...s, progressMessage: event.message ?? (event as any).filename ?? "Extracted" }))
+              setState((s) => ({ ...s, progress: event.percent ?? s.progress }))
             } else if (event.type === "done") {
               setState((s) => ({ ...s, isStreaming: false, isDone: true, progress: 100 }))
             } else if (event.type === "error") {
@@ -87,7 +188,7 @@ export function useRiskStream() {
         }
       }
     } catch {
-      // Fall through to simulation
+      // Fall back to simulation on error
       await simulateStream(setState)
     }
   }, [])

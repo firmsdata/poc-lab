@@ -1,15 +1,16 @@
 import { useState, useEffect } from "react"
-import { Upload, Eye, Calendar, FileText } from "lucide-react"
+import { Eye, Calendar, FileText } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { fetchDocuments } from "@/services/api"
-import { UploadZone } from "./UploadZone"
+import { DocumentDetailModal } from "./DocumentDetailModal"
 import type { Document } from "@/types"
 
 export function AnalysisHistory() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [loading, setLoading] = useState(true)
-  const [uploadOpen, setUploadOpen] = useState(false)
+  const [selectedDocument, setSelectedDocument] = useState<Document | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   useEffect(() => {
     fetchDocuments()
@@ -29,13 +30,6 @@ export function AnalysisHistory() {
               {documents.length} documents analyzed
             </p>
           </div>
-          <Button
-            onClick={() => setUploadOpen(true)}
-            className="bg-primary hover:bg-primary/90"
-          >
-            <Upload className="size-4" />
-            Upload DRHP
-          </Button>
         </div>
 
         {/* Table */}
@@ -61,7 +55,9 @@ export function AnalysisHistory() {
                 <th className="py-3 px-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Date Added
                 </th>
-                <th className="py-3 px-4 sr-only">Actions</th>
+                <th className="py-3 px-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -113,12 +109,17 @@ export function AnalysisHistory() {
                     </td>
                     <td className="py-3 px-4">
                       <Button
-                        size="icon-sm"
+                        size="sm"
                         variant="ghost"
-                        className="size-7 text-muted-foreground hover:text-primary"
+                        className="text-muted-foreground hover:text-primary"
                         title="View audit"
+                        onClick={() => {
+                          setSelectedDocument(doc)
+                          setDetailsOpen(true)
+                        }}
                       >
-                        <Eye className="size-3.5" />
+                        <Eye className="size-3.5 mr-2" />
+                        View
                       </Button>
                     </td>
                   </tr>
@@ -134,7 +135,6 @@ export function AnalysisHistory() {
               <Button
                 variant="outline"
                 className="mt-4"
-                onClick={() => setUploadOpen(true)}
               >
                 Upload your first DRHP
               </Button>
@@ -143,7 +143,11 @@ export function AnalysisHistory() {
         </div>
       </div>
 
-      <UploadZone open={uploadOpen} onClose={() => setUploadOpen(false)} />
+      <DocumentDetailModal
+        document={selectedDocument}
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+      />
     </>
   )
 }

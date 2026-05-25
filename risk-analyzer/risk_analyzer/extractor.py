@@ -294,16 +294,30 @@ class RiskAnalyzer:
         'numbered' | 'bullet' | 'heading_based'
         """
         blocks = self._trim_before_first_numbered_risk(blocks)
-        sample = blocks[:50]
 
-        numbered_count = sum(
+        numbered_block_count = sum(
             1 for b in blocks[:100] if re.match(r"^\s*\d{1,3}\.\s+", b)
         )
-        if numbered_count >= 2:
+        line_numbered_count = sum(
+            1
+            for b in blocks[:100]
+            for line in b.split("\n")
+            if re.match(r"^\s*\d{1,3}\.\s+", line)
+        )
+        if numbered_block_count >= 2 or line_numbered_count >= 3:
             return "numbered"
 
+        bullet_line_count = sum(
+            1
+            for b in blocks[:100]
+            for line in b.split("\n")
+            if re.match(r"^\s*[•\-\*]\s+", line)
+        )
+        if bullet_line_count >= 3:
+            return "bullet"
+
         counts = {"numbered": 0, "bullet": 0, "heading_based": 0}
-        for block in sample:
+        for block in blocks[:50]:
             lines = block.split("\n")
             first = lines[0].strip()
             if re.match(r"^\d+\.", first):
@@ -324,6 +338,11 @@ class RiskAnalyzer:
         """Split blocks into individual risk items according to the detected pattern."""
         if pattern == "numbered":
             blocks = self._trim_before_first_numbered_risk(blocks)
+            blocks = self._split_numbered_blocks(blocks)
+        elif pattern == "bullet":
+            blocks = self._split_bullet_blocks(blocks)
+        elif pattern == "heading_based":
+            blocks = self._split_heading_blocks(blocks)
 
         risks: List[str] = []
         current: List[str] = []
@@ -440,6 +459,62 @@ class RiskAnalyzer:
                 return blocks[idx:]
         return blocks
 
+    @staticmethod
+    def _split_by_line_marker(block: str, pattern: str) -> List[str]:
+        lines = block.split("\n")
+        segments: List[str] = []
+        current: List[str] = []
+
+        for line in lines:
+            if re.match(pattern, line):
+                if current:
+                    segments.append("\n".join(current))
+                current = [line]
+            else:
+                current.append(line)
+
+        if current:
+            segments.append("\n".join(current))
+
+        return segments
+
+    def _split_numbered_blocks(self, blocks: List[str]) -> List[str]:
+        results: List[str] = []
+        for block in blocks:
+            results.extend(self._split_by_line_marker(block, r"^\s*\d{1,3}\.\s+"))
+        return results
+
+    def _split_bullet_blocks(self, blocks: List[str]) -> List[str]:
+        results: List[str] = []
+        for block in blocks:
+            results.extend(self._split_by_line_marker(block, r"^\s*[•\-\*]\s+"))
+        return results
+
+    def _is_heading_candidate(self, line: str) -> bool:
+        first = line.strip()
+        return bool(
+            first
+            and len(first) < 100
+            and (first.istitle() or first.isupper())
+            and not first.endswith(".")
+        )
+
+    def _split_heading_blocks(self, blocks: List[str]) -> List[str]:
+        results: List[str] = []
+        for block in blocks:
+            lines = block.split("\n")
+            current: List[str] = []
+            for line in lines:
+                if self._is_heading_candidate(line):
+                    if current:
+                        results.append("\n".join(current))
+                    current = [line]
+                else:
+                    current.append(line)
+            if current:
+                results.append("\n".join(current))
+        return results
+
     # Document-context helpers ----------------------------------------
 
     def _infer_company_name(self, text: str) -> Optional[str]:
@@ -462,7 +537,12 @@ class RiskAnalyzer:
 
     @staticmethod
     def _infer_ipo_year(text: str) -> Optional[int]:
-        years = [int(y) for y in re.findall(r"\b20(?:1[8-9]|2[0-9])\b", text)]
+        import datetime
+        current_year = datetime.date.today().year
+        years = [
+            int(y) for y in re.findall(r"\b(20\d{2})\b", text)
+            if 2015 <= int(y) <= current_year + 1
+        ]
         return max(years) if years else None
 
 
