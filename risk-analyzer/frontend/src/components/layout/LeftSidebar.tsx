@@ -1,6 +1,6 @@
 import { useState, useEffect, type ComponentType } from "react"
 import { useLocation, Link } from "react-router-dom"
-import { BookOpen, History, BarChart3, ChevronRight } from "lucide-react"
+import { BookOpen, History, BarChart3, ChevronRight, PenLine } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -30,6 +30,12 @@ const navItems = [
     href: "/analysis",
     icon: History,
     description: "Previously analyzed DRHPs",
+  },
+  {
+    title: "Drafting Assistant",
+    href: "/draft",
+    icon: PenLine,
+    description: "Draft & score risk factors",
   },
 ]
 

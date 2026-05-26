@@ -58,6 +58,17 @@ export async function fetchRisks(filters: Partial<KBFilters>): Promise<RiskRecor
   )
 }
 
+export async function fetchRiskSummary(riskId: string): Promise<string> {
+  try {
+    const res = await fetch(`${API_BASE}/kb/risks/${encodeURIComponent(riskId)}/summary`)
+    if (!res.ok) return "Summary unavailable."
+    const data = await res.json() as { summary: string }
+    return data.summary ?? "Summary unavailable."
+  } catch {
+    return "Summary unavailable."
+  }
+}
+
 export async function fetchCompanies(domain?: string): Promise<CompanyRecord[]> {
   const qs = domain ? `?domain=${encodeURIComponent(domain)}` : ""
   return fetchJSON<CompanyRecord[]>(`${API_BASE}/kb/companies${qs}`, mockCompanies)
@@ -83,6 +94,63 @@ export async function fetchDisclosurePatterns(
 
 export async function fetchDocuments(): Promise<Document[]> {
   return fetchJSON<Document[]>(`${API_BASE}/documents`, mockDocuments)
+}
+
+// ─── Drafting Assistant ───────────────────────────────────────────────────────
+
+export type ChecklistItem = {
+  id: string
+  label: string
+  passed: boolean
+  detail?: string | null
+}
+
+export type DraftAnalysisResult = {
+  quality: "High Concern" | "Needs Improvement" | "Adequate"
+  score: number
+  issue?: string
+  improvement?: string
+  rewrite?: string
+  checklist: ChecklistItem[]
+  ai_available: boolean
+}
+
+export type DraftTemplate = {
+  id: string
+  title: string
+  category: string
+  boilerplate: string
+  compliant: string
+  issues: string[]
+}
+
+export async function analyzeDraft(
+  text: string,
+  domain?: string,
+  category?: string
+): Promise<DraftAnalysisResult | null> {
+  try {
+    const res = await fetch(`${API_BASE}/draft/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, domain, category }),
+    })
+    if (!res.ok) return null
+    return (await res.json()) as DraftAnalysisResult
+  } catch {
+    return null
+  }
+}
+
+export async function fetchDraftTemplates(): Promise<DraftTemplate[]> {
+  try {
+    const res = await fetch(`${API_BASE}/draft/templates`)
+    if (!res.ok) return []
+    const data = await res.json() as { templates: DraftTemplate[] }
+    return data.templates ?? []
+  } catch {
+    return []
+  }
 }
 
 export function uploadDRHP(file: File, stream: boolean = false): Promise<Response> {

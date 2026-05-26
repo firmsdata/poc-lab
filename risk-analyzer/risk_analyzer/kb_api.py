@@ -155,6 +155,61 @@ def api_kb_risks(
     ]
 
 
+@router.get("/risks/{risk_id}/summary")
+def api_kb_risk_summary(risk_id: int):
+    """Generate a one-line summary for a specific risk using AI."""
+    rows = _run_query("SELECT description FROM risks WHERE id = %(id)s", {"id": risk_id})
+    if not rows:
+        return {"summary": "Risk not found."}
+    
+    desc = rows[0]["description"]
+    if not desc:
+        return {"summary": "No description available to summarize."}
+        
+    import os, json, urllib.request
+    OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434") + "/api/chat"
+    model = os.environ.get("RISK_AI_MODEL", "llama3")
+    
+    system = "You are a concise financial analyst. Summarize the following risk factor description in exactly one short sentence. Reply ONLY with the summary sentence. Do NOT include phrases like 'Here is a concise summary' or any other preamble."
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": desc},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+    try:
+        req = urllib.request.Request(
+            OLLAMA_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data.get("message", {}).get("content", "").strip()
+            
+            # Post-process to remove conversational prefixes if the model still outputs them
+            lower_content = content.lower()
+            prefixes_to_strip = [
+                "here is a concise summary of the risk factor description in exactly one short sentence:",
+                "here is a concise summary:",
+                "here is a summary:",
+                "here is the summary:",
+                "summary:"
+            ]
+            for prefix in prefixes_to_strip:
+                if lower_content.startswith(prefix):
+                    content = content[len(prefix):].strip()
+                    break
+                    
+            return {"summary": content}
+    except Exception as exc:
+        logger.warning(f"Failed to generate summary: {exc}")
+        return {"summary": (desc[:100] + "...") if len(desc) > 100 else desc}
+
+
 @router.get("/companies")
 def api_kb_companies(domain: Optional[str] = Query(None)):
     """Companies (distinct DRHPs) in the corpus, optionally filtered by domain."""

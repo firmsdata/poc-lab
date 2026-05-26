@@ -7,9 +7,11 @@ type AppShellProps = {
   children: React.ReactNode
   title: string
   actions?: React.ReactNode
+  /** When true, content fills the available height and controls its own scrolling. */
+  fullHeight?: boolean
 }
 
-export function AppShell({ children, title, actions }: AppShellProps) {
+export function AppShell({ children, title, actions, fullHeight }: AppShellProps) {
   return (
     <SidebarProvider>
       <LeftSidebar />
@@ -25,7 +27,7 @@ export function AppShell({ children, title, actions }: AppShellProps) {
         </header>
 
         {/* Page content */}
-        <div className="flex-1 overflow-auto">
+        <div className={fullHeight ? "flex flex-col flex-1 min-h-0 overflow-hidden" : "flex-1 overflow-auto"}>
           {children}
         </div>
       </SidebarInset>

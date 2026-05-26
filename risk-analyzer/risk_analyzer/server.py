@@ -25,6 +25,7 @@ from .knowledge_base import evaluate_risk_against_rulebook, evaluate_section_cov
 from .pipeline import analyze_pdf
 from .kb_api import router as kb_router
 from .chat_api import router as chat_router
+from .draft_api import router as draft_router
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ app = FastAPI(title="FirmsData Risk Analyzer API")
 # Routers must be included before the catch-all static mount
 app.include_router(kb_router)
 app.include_router(chat_router)
+app.include_router(draft_router)
 
 # Allow CORS for development
 app.add_middleware(
