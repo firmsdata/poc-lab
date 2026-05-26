@@ -1,11 +1,12 @@
-const uploadInput = document.getElementById('drhp-upload');
-const loadingOverlay = document.getElementById('loading-overlay');
-const loadingText = document.getElementById('loading-text');
-const emptyState = document.getElementById('empty-state');
-const results = document.getElementById('results');
-const riskCards = document.getElementById('risk-cards');
+const uploadInput     = document.getElementById('drhp-upload');
+const loadingOverlay  = document.getElementById('loading-overlay');
+const loadingText     = document.getElementById('loading-text');
+const emptyState      = document.getElementById('empty-state');
+const results         = document.getElementById('results');
+const riskCards       = document.getElementById('risk-cards');
 const resultsFilename = document.getElementById('results-filename');
-const resultsSummary = document.getElementById('results-summary');
+const resultsSummary  = document.getElementById('results-summary');
+const streamProgress  = document.getElementById('stream-progress');
 
 uploadInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
@@ -14,13 +15,24 @@ uploadInput.addEventListener('change', (e) => {
   uploadDRHP(file);
 });
 
+/* ── Full-screen overlay (used only for the initial HTTP round-trip) ── */
 function showLoading(msg) {
   loadingText.textContent = msg || 'Analysing document...';
   loadingOverlay.classList.add('visible');
 }
-
 function hideLoading() {
   loadingOverlay.classList.remove('visible');
+}
+
+/* ── Inline stream-progress badge ── */
+function setStreamStatus(msg, done) {
+  if (!streamProgress) return;
+  streamProgress.textContent = msg || '';
+  if (done) {
+    streamProgress.className = 'badge badge-ok';
+  } else {
+    streamProgress.className = 'badge badge-needs';
+  }
 }
 
 let currentDocData = {
@@ -34,113 +46,196 @@ let currentDocData = {
 };
 
 async function uploadDRHP(file) {
-  showLoading(`Extracting risks from "${file.name}"… This may take a minute.`);
-  emptyState.style.display = 'none';
-  results.style.display = 'none';
-  riskCards.innerHTML = '';
+  /* Show results panel immediately so streamed cards are visible */
+  emptyState.style.display  = 'none';
+  results.style.display     = 'block';
+  riskCards.innerHTML       = '';
+  resultsFilename.textContent = file.name;
+  resultsSummary.textContent  = '';
+  setStreamStatus(`Uploading "${file.name}"…`);
+
+  /* Small spinner overlay only while waiting for the server to respond */
+  showLoading(`Uploading "${file.name}"…`);
 
   const formData = new FormData();
   formData.append('file', file);
 
   try {
-    const response = await fetch('/api/upload-drhp', { method: 'POST', body: formData });
-    
+    const response = await fetch('/api/upload-drhp?stream=false', { method: 'POST', body: formData });
+
+    /* Dismiss full-screen overlay as soon as HTTP headers arrive */
+    hideLoading();
+
     if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.detail || 'Upload failed');
+      let detail = 'Upload failed';
+      try { detail = (await response.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
     }
 
-    const reader = response.body.getReader();
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      
+      resultsFilename.textContent = data.filename || file.name;
+      currentDocData = {
+        total:           data.total_risks || 0,
+        domain:          data.domain || 'Unknown',
+        baselineDocs:    data.baseline_documents || [],
+        highCount:       0,
+        needsCount:      0,
+        okCount:         0,
+        sectionFindings: data.section_findings || [],
+      };
+      
+      if (currentDocData.total === 0) {
+        riskCards.innerHTML = '<p class="no-risks-msg">No risk factors were found in this document.</p>';
+      }
+      updateSummaryUI();
+      
+      const risks = data.risks || [];
+      for (let i = 0; i < risks.length; i++) {
+        const risk = risks[i];
+        
+        if      (risk.quality === 'HIGH CONCERN')      currentDocData.highCount++;
+        else if (risk.quality === 'NEEDS IMPROVEMENT') currentDocData.needsCount++;
+        else                                           currentDocData.okCount++;
+
+        updateSummaryUI();
+        setStreamStatus(`Analysing risk ${risk.index} of ${currentDocData.total}…`);
+
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = buildRiskCard(risk, risk.index);
+        const card = tempDiv.firstElementChild;
+        riskCards.appendChild(card);
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        
+        // Brief 80ms delay per card for smooth transition
+        await new Promise(resolve => setTimeout(resolve, 80));
+      }
+      
+      setStreamStatus('Analysis complete', true);
+      return;
+    }
+
+    const reader  = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-    
+    let   buffer  = '';
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop(); // keep the last partial line
-      
+      buffer = lines.pop(); // keep the (possibly partial) last line
+
       for (const line of lines) {
         if (!line.trim()) continue;
-        const event = JSON.parse(line);
-        
-        const streamProgress = document.getElementById('stream-progress');
-        
+        let event;
+        try { event = JSON.parse(line); } catch (_) { continue; }
+
         if (event.type === 'status') {
-            loadingText.textContent = event.message;
-            if (streamProgress) streamProgress.textContent = event.message;
+          setStreamStatus(event.message);
+
         } else if (event.type === 'extracted') {
-            hideLoading();
-            results.style.display = 'block';
-            resultsFilename.textContent = event.filename || 'Uploaded Document';
-            
-            currentDocData = {
-              total: event.total_risks || 0,
-              domain: event.domain || 'Unknown',
-              baselineDocs: event.baseline_documents || [],
-              highCount: 0,
-              needsCount: 0,
-              okCount: 0,
-              sectionFindings: event.section_findings || []
-            };
-            
-            if (currentDocData.total === 0) {
-              riskCards.innerHTML = '<p class="no-risks-msg">No risk factors were found in this document.</p>';
-            }
-            updateSummaryUI();
+          resultsFilename.textContent = event.filename || file.name;
+          currentDocData = {
+            total:           event.total_risks || 0,
+            domain:          event.domain || 'Unknown',
+            baselineDocs:    event.baseline_documents || [],
+            highCount:       0,
+            needsCount:      0,
+            okCount:         0,
+            sectionFindings: event.section_findings || [],
+          };
+          if (currentDocData.total === 0) {
+            riskCards.innerHTML = '<p class="no-risks-msg">No risk factors were found in this document.</p>';
+          }
+          setStreamStatus(`Extracted ${currentDocData.total} risk${currentDocData.total !== 1 ? 's' : ''} — analysing…`);
+          updateSummaryUI();
+
         } else if (event.type === 'risk_feedback') {
-            const risk = event.risk;
-            if (risk.quality === 'HIGH CONCERN') currentDocData.highCount++;
-            else if (risk.quality === 'NEEDS IMPROVEMENT') currentDocData.needsCount++;
-            else currentDocData.okCount++;
-            
-            updateSummaryUI();
-            
-            // Append risk card
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = buildRiskCard(risk, risk.index);
-            riskCards.appendChild(tempDiv.firstElementChild);
-            
+          const risk = event.risk;
+          if      (risk.quality === 'HIGH CONCERN')      currentDocData.highCount++;
+          else if (risk.quality === 'NEEDS IMPROVEMENT') currentDocData.needsCount++;
+          else                                           currentDocData.okCount++;
+
+          updateSummaryUI();
+          setStreamStatus(`Analysing risk ${risk.index} of ${currentDocData.total}…`);
+
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = buildRiskCard(risk, risk.index);
+          const card = tempDiv.firstElementChild;
+          riskCards.appendChild(card);
+          /* Scroll new card into view so the user sees live progress */
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
         } else if (event.type === 'error') {
-            throw new Error(event.message);
+          throw new Error(event.message);
+
         } else if (event.type === 'done') {
-            // Done streaming
-            hideLoading();
-            if (streamProgress) streamProgress.textContent = "Done.";
+          setStreamStatus('Analysis complete', true);
         }
       }
     }
-    
+
+    /* Handle any residual data sitting in the buffer */
     if (buffer.trim()) {
+      try {
         const event = JSON.parse(buffer);
-        // Parse last chunk if needed
+        if (event.type === 'done') setStreamStatus('Analysis complete', true);
+      } catch (_) {}
     }
-  } catch(err) {
-      hideLoading();
+
+  } catch (err) {
+    hideLoading();
+    /* Show the error in the status badge; keep any cards already rendered */
+    setStreamStatus(`\u26A0\uFE0F ${err.message || err}`);
+    if (streamProgress) streamProgress.className = 'badge badge-concern';
+
+    /* If nothing rendered yet, fall back to the empty state */
+    if (!riskCards.firstElementChild) {
+      results.style.display    = 'none';
       emptyState.style.display = 'flex';
-      results.style.display = 'none';
       alert(`Error: ${err}`);
+    }
   }
 }
 
 function updateSummaryUI() {
   const { total, domain, baselineDocs, highCount, needsCount, okCount, sectionFindings } = currentDocData;
-  let summaryHTML = `${total} risk factor${total !== 1 ? 's' : ''} extracted — ` +
-    `${highCount} high concern, ${needsCount} need improvement, ${okCount} adequate.<br/>`;
+  
+  let summaryHTML = `
+    <div class="stats-counter-bar">
+      <div class="stat-counter-card ok">
+        <span class="stat-count-number">${okCount}</span>
+        <span class="stat-count-label">Adequate</span>
+      </div>
+      <div class="stat-counter-card needs">
+        <span class="stat-count-number">${needsCount}</span>
+        <span class="stat-count-label">Needs Work</span>
+      </div>
+      <div class="stat-counter-card concern">
+        <span class="stat-count-number">${highCount}</span>
+        <span class="stat-count-label">Concern</span>
+      </div>
+    </div>
     
-  summaryHTML += `<br/><strong>Classified Domain:</strong> ${escHtml(domain)}<br/>`;
+    <div class="doc-meta-info">
+      <strong>Classified Domain:</strong> <span class="badge-tag">${escHtml(domain)}</span>
+  `;
+  
   if (baselineDocs.length > 0) {
-    summaryHTML += `<strong>Baseline RHPs:</strong> ${escHtml(baselineDocs.join(', '))}`;
+    summaryHTML += ` | <strong>Baseline RHPs:</strong> ${escHtml(baselineDocs.join(', '))}`;
   } else {
-    summaryHTML += `<strong>Baseline RHPs:</strong> None available`;
+    summaryHTML += ` | <strong>Baseline RHPs:</strong> None available`;
   }
+  summaryHTML += `</div>`;
 
   if (sectionFindings && sectionFindings.length > 0) {
     summaryHTML += `<div class="section-findings">
       <strong>Rulebook coverage:</strong>
-      ${sectionFindings.map(finding => `<span>${escHtml(finding.message || finding.title)}</span>`).join('')}
+      ${sectionFindings.map(f => `<span>${escHtml(f.message || f.title)}</span>`).join('')}
     </div>`;
   }
 
@@ -148,40 +243,37 @@ function updateSummaryUI() {
 }
 
 function buildRiskCard(risk, index) {
-  const quality = risk.quality || 'ADEQUATE';
-  const cls = quality === 'HIGH CONCERN' ? 'concern'
-             : quality === 'NEEDS IMPROVEMENT' ? 'needs'
-             : 'ok';
+  const quality  = risk.quality || 'ADEQUATE';
+  const cls      = quality === 'HIGH CONCERN'      ? 'concern'
+                 : quality === 'NEEDS IMPROVEMENT'  ? 'needs'
+                 :                                    'ok';
+  const badgeCls = quality === 'HIGH CONCERN'      ? 'badge-concern'
+                 : quality === 'NEEDS IMPROVEMENT'  ? 'badge-needs'
+                 :                                    'badge-ok';
+  const icon     = quality === 'HIGH CONCERN'      ? '\u26A0\uFE0F'
+                 : quality === 'NEEDS IMPROVEMENT'  ? '\uD83D\uDD36'
+                 :                                    '\u2705';
 
-  const badgeCls = quality === 'HIGH CONCERN' ? 'badge-concern'
-                 : quality === 'NEEDS IMPROVEMENT' ? 'badge-needs'
-                 : 'badge-ok';
-
-  const icon = quality === 'HIGH CONCERN' ? '⚠️'
-              : quality === 'NEEDS IMPROVEMENT' ? '🔶'
-              : '✅';
-
-  // Meta tags
   const metaTags = [risk.domain, risk.category, risk.sub_category]
     .filter(Boolean)
     .map(t => `<span class="meta-tag">${escHtml(t)}</span>`)
     .join('');
 
-  // Description – truncate to 3 lines worth
   const desc = risk.description
-    ? `<p class="risk-description">${escHtml(risk.description.slice(0, 600))}${risk.description.length > 600 ? '…' : ''}</p>`
+    ? `<p class="risk-description">${escHtml(risk.description.slice(0, 600))}${risk.description.length > 600 ? '\u2026' : ''}</p>`
     : '';
 
-  // Feedback block
   let feedback = '';
   if (quality === 'ADEQUATE') {
     feedback = `
       <div class="feedback-block ok">
-        <div class="feedback-label">✅ ADEQUATE DISCLOSURE</div>
+        <div class="feedback-label">\u2705 ADEQUATE DISCLOSURE</div>
         <p class="feedback-text">This risk factor meets standard disclosure requirements.</p>
       </div>`;
   } else {
-    const issue = risk.issue ? `<p class="feedback-text feedback-issue"><strong>Issue:</strong> ${escHtml(risk.issue)}</p>` : '';
+    const issue       = risk.issue
+      ? `<p class="feedback-text feedback-issue"><strong>Issue:</strong> ${escHtml(risk.issue)}</p>`
+      : '';
     const improvement = risk.improvement
       ? `<p class="feedback-text feedback-improvement"><strong>Suggested improvement:</strong> ${escHtml(risk.improvement)}</p>`
       : '';
@@ -215,7 +307,11 @@ function buildRiskCard(risk, index) {
 
 function escHtml(str) {
   if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(str)
+    .replace(/&/g,  '&amp;')
+    .replace(/</g,  '&lt;')
+    .replace(/>/g,  '&gt;')
+    .replace(/"/g,  '&quot;');
 }
 
 function buildRulebookFinding(finding) {
