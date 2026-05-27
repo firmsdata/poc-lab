@@ -287,6 +287,19 @@ async def api_upload_drhp(file: UploadFile = File(...), stream: bool = True):
                 "total_risks": len(risk_records),
                 "section_findings": section_findings,
                 "rulebook": get_rulebook_summary(),
+                "risks": [
+                    {
+                        "index": i + 1,
+                        "title": risk.get("title", ""),
+                        "description": risk.get("description", ""),
+                        "domain": risk.get("domain", ""),
+                        "category": risk.get("category", ""),
+                        "sub_category": risk.get("sub_category", ""),
+                    }
+                    for i, risk in enumerate(risk_records)
+                ],
+                "message": f"Extracted {len(risk_records)} risks. Starting feedback review...",
+                "percent": 30,
             }) + "\n"
 
             # 2. Iterate and generate single-risk feedback incrementally

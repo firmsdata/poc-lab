@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react"
-import type { StreamedRisk } from "@/types"
+import { useState, useCallback, type Dispatch, type SetStateAction } from "react"
+import type { QualityRating, StreamedRisk } from "@/types"
 import { uploadDRHP } from "@/services/api"
 
 export type StreamState = {
@@ -32,7 +32,7 @@ export function useRiskStream() {
     })
 
     try {
-      const res = await uploadDRHP(file, false)
+      const res = await uploadDRHP(file, true)
 
       if (!res.ok) {
         // Fall back to simulation if upload fails
@@ -81,15 +81,7 @@ export function useRiskStream() {
             })
             .filter(Boolean)
 
-          const mapped: StreamedRisk = {
-            title: r.title || "",
-            domain: r.domain || "",
-            category: r.category || r.sub_category || "",
-            quality_rating: r.quality || r.quality_rating || "Adequate",
-            issue: r.issue || "",
-            improvement_suggestion: r.improvement || r.improvement_suggestion || "",
-            rulebook_findings,
-          }
+          const mapped = mapRisk(r, rulebook_findings, "complete")
 
           setState((s) => ({
             ...s,
@@ -136,7 +128,9 @@ export function useRiskStream() {
               message?: string
               percent?: number
               risk?: StreamedRisk
+              risks?: StreamedRisk[]
               total?: number
+              total_risks?: number
             }
             if (event.type === "progress" || event.type === "status") {
               setState((s) => ({
@@ -164,19 +158,34 @@ export function useRiskStream() {
                 })
                 .filter(Boolean)
 
-              const mapped: StreamedRisk = {
-                title: r.title || "",
-                domain: r.domain || "",
-                category: r.category || r.sub_category || "",
-                quality_rating: r.quality || r.quality_rating || "Adequate",
-                issue: r.issue || "",
-                improvement_suggestion: r.improvement || r.improvement_suggestion || "",
-                rulebook_findings,
-              }
-              setState((s) => ({ ...s, risks: [...s.risks, mapped] }))
+              const mapped = mapRisk(r, rulebook_findings, "complete")
+              setState((s) => {
+                const riskIndex = typeof mapped.index === "number" ? mapped.index - 1 : -1
+                const risks = [...s.risks]
+                if (riskIndex >= 0 && riskIndex < risks.length) {
+                  risks[riskIndex] = { ...risks[riskIndex], ...mapped }
+                } else {
+                  risks.push(mapped)
+                }
+                const completed = risks.filter((risk) => risk.feedback_status === "complete").length
+                const total = risks.length || event.total_risks || event.total || completed
+                return {
+                  ...s,
+                  progress: total ? Math.min(30 + Math.floor((completed / total) * 70), 99) : s.progress,
+                  progressMessage: `Reviewed ${completed} of ${total} risks...`,
+                  risks,
+                }
+              })
             } else if (event.type === "extracted") {
-              setState((s) => ({ ...s, progressMessage: event.message ?? (event as any).filename ?? "Extracted" }))
-              setState((s) => ({ ...s, progress: event.percent ?? s.progress }))
+              const extractedRisks = Array.isArray(event.risks)
+                ? event.risks.map((risk: any, idx: number) => mapRisk({ ...risk, index: risk.index ?? idx + 1 }, [], "pending"))
+                : []
+              setState((s) => ({
+                ...s,
+                progressMessage: event.message ?? `Extracted ${event.total_risks ?? extractedRisks.length} risks. Starting feedback review...`,
+                progress: event.percent ?? 30,
+                risks: extractedRisks.length ? extractedRisks : s.risks,
+              }))
             } else if (event.type === "done") {
               setState((s) => ({ ...s, isStreaming: false, isDone: true, progress: 100 }))
             } else if (event.type === "error") {
@@ -208,6 +217,32 @@ export function useRiskStream() {
 }
 
 type SetState = Dispatch<SetStateAction<StreamState>>
+
+function normalizeQuality(value: unknown): QualityRating {
+  const raw = String(value || "").toLowerCase()
+  if (raw.includes("high")) return "High Concern"
+  if (raw.includes("need")) return "Needs Improvement"
+  return "Adequate"
+}
+
+function mapRisk(
+  risk: any,
+  rulebookFindings: string[] = [],
+  feedbackStatus: "pending" | "complete" = "complete"
+): StreamedRisk {
+  return {
+    index: typeof risk.index === "number" ? risk.index : undefined,
+    title: risk.title || "",
+    description: risk.description || "",
+    domain: risk.domain || "",
+    category: risk.category || risk.sub_category || "",
+    quality_rating: normalizeQuality(risk.quality || risk.quality_rating),
+    issue: risk.issue || "",
+    improvement_suggestion: risk.improvement || risk.improvement_suggestion || "",
+    rulebook_findings: rulebookFindings,
+    feedback_status: feedbackStatus,
+  }
+}
 
 async function simulateStream(setState: SetState) {
   const mockRisks: StreamedRisk[] = [
@@ -284,5 +319,3 @@ async function simulateStream(setState: SetState) {
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
-
-import type { Dispatch, SetStateAction } from "react"

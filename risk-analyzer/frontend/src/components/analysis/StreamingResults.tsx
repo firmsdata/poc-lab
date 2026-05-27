@@ -38,9 +38,11 @@ export function StreamingResults({ state }: StreamingResultsProps) {
   }
 
   // Compute severity counts for the stats bar
-  const highConcernCount = risks.filter((r) => r.quality_rating === "High Concern").length
-  const needsImprovementCount = risks.filter((r) => r.quality_rating === "Needs Improvement").length
-  const adequateCount = risks.filter((r) => r.quality_rating === "Adequate").length
+  const completedCount = risks.filter((r) => r.feedback_status === "complete").length
+  const pendingCount = risks.length - completedCount
+  const highConcernCount = risks.filter((r) => r.feedback_status === "complete" && r.quality_rating === "High Concern").length
+  const needsImprovementCount = risks.filter((r) => r.feedback_status === "complete" && r.quality_rating === "Needs Improvement").length
+  const adequateCount = risks.filter((r) => r.feedback_status === "complete" && r.quality_rating === "Adequate").length
 
   const selectedRisk = risks[selectedIdx] || risks[0]
 
@@ -101,7 +103,11 @@ export function StreamingResults({ state }: StreamingResultsProps) {
 
       {/* Live Stats Bar */}
       {risks.length > 0 && (
-        <div className="grid grid-cols-3 gap-2 shrink-0">
+        <div className="grid grid-cols-4 gap-2 shrink-0">
+          <div className="flex flex-col items-center justify-center p-2 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400">
+            <span className="text-sm font-bold">{pendingCount}</span>
+            <span className="text-[10px] uppercase font-semibold text-blue-500/70 tracking-wider">Pending</span>
+          </div>
           <div className="flex flex-col items-center justify-center p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
             <span className="text-sm font-bold">{adequateCount}</span>
             <span className="text-[10px] uppercase font-semibold text-emerald-500/70 tracking-wider">Adequate</span>
@@ -142,7 +148,9 @@ export function StreamingResults({ state }: StreamingResultsProps) {
                     {risks.map((risk, i) => {
                       const isSelected = selectedIdx === i
                       const severityColor =
-                        risk.quality_rating === "High Concern"
+                        risk.feedback_status !== "complete"
+                          ? "bg-blue-500"
+                          : risk.quality_rating === "High Concern"
                           ? "bg-red-500"
                           : risk.quality_rating === "Needs Improvement"
                           ? "bg-amber-500"
@@ -192,14 +200,16 @@ export function StreamingResults({ state }: StreamingResultsProps) {
                     <span
                       className={cn(
                         "text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded border tracking-wide",
-                        selectedRisk.quality_rating === "High Concern"
+                        selectedRisk.feedback_status !== "complete"
+                          ? "bg-blue-500/10 border-blue-500/30 text-blue-400"
+                          : selectedRisk.quality_rating === "High Concern"
                           ? "bg-red-500/10 border-red-500/30 text-red-400"
                           : selectedRisk.quality_rating === "Needs Improvement"
                           ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
                           : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
                       )}
                     >
-                      {selectedRisk.quality_rating}
+                      {selectedRisk.feedback_status === "complete" ? selectedRisk.quality_rating : "Feedback pending"}
                     </span>
                   )}
                 </div>
@@ -211,12 +221,22 @@ export function StreamingResults({ state }: StreamingResultsProps) {
                       <div className="space-y-1">
                         <h4 className="text-xs font-bold text-foreground leading-snug">{selectedRisk.title}</h4>
                         <p className="text-[11px] text-muted-foreground leading-relaxed bg-muted/10 p-2.5 rounded border border-border/30">
-                          {selectedRisk.issue || "No description provided."}
+                          {selectedRisk.description || selectedRisk.issue || "No description provided."}
                         </p>
                       </div>
 
                       {/* Feedback Info Box */}
-                      {selectedRisk.quality_rating !== "Adequate" ? (
+                      {selectedRisk.feedback_status !== "complete" ? (
+                        <div className="p-4 rounded-lg bg-blue-500/5 border border-blue-500/10 flex items-start gap-2.5">
+                          <Loader2 className="size-4.5 text-blue-400 mt-0.5 shrink-0 animate-spin" />
+                          <div className="space-y-0.5">
+                            <h5 className="text-xs font-bold text-blue-400">Feedback Pending</h5>
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              This risk has been extracted. AI feedback will appear here as soon as this item is reviewed.
+                            </p>
+                          </div>
+                        </div>
+                      ) : selectedRisk.quality_rating !== "Adequate" ? (
                         <div className="space-y-3">
                           {/* Issue detail */}
                           <div className="space-y-1 p-3 rounded-lg bg-red-500/5 border border-red-500/10">

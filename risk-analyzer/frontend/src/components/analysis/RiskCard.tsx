@@ -39,6 +39,7 @@ const qualityConfig: Record<
 }
 
 export function RiskCard({ risk, index }: RiskCardProps) {
+  const isPending = risk.feedback_status !== "complete"
   const config = qualityConfig[risk.quality_rating]
   const Icon = config.icon
 
@@ -46,46 +47,63 @@ export function RiskCard({ risk, index }: RiskCardProps) {
     <Card
       className={cn(
         "border border-l-2 bg-card/80 py-0 gap-0 animate-risk-card",
-        config.border
+        isPending ? "border-l-blue-500" : config.border
       )}
       style={{ animationDelay: `${index * 80}ms` }}
     >
       <CardContent className="p-4 space-y-3">
         {/* Title row */}
         <div className="flex items-start gap-3">
-          <Icon className={cn("size-4 shrink-0 mt-0.5", config.iconColor)} />
+          {isPending ? (
+            <BookOpen className="size-4 shrink-0 mt-0.5 text-blue-400" />
+          ) : (
+            <Icon className={cn("size-4 shrink-0 mt-0.5", config.iconColor)} />
+          )}
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground leading-tight">{risk.title}</p>
             <div className="flex items-center gap-2 mt-1.5">
               <Badge variant="blue" className="text-[10px]">{risk.domain}</Badge>
               <Badge variant="cyan" className="text-[10px] capitalize">{risk.category}</Badge>
-              <Badge variant={config.variant} className="text-[10px]">
-                {risk.quality_rating}
+              <Badge variant={isPending ? "blue" : config.variant} className="text-[10px]">
+                {isPending ? "Feedback pending" : risk.quality_rating}
               </Badge>
             </div>
           </div>
         </div>
 
+        {risk.description && (
+          <div className="space-y-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Extracted Risk
+            </p>
+            <p className="text-xs text-foreground/80 leading-relaxed">{risk.description}</p>
+          </div>
+        )}
+
         {/* Issue */}
-        <div className="space-y-1">
+        {!isPending && (
+          <div className="space-y-1">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
             <AlertTriangle className="size-3" />
             Issue Identified
           </p>
           <p className="text-xs text-foreground/80 leading-relaxed">{risk.issue}</p>
-        </div>
+          </div>
+        )}
 
         {/* Improvement suggestion */}
-        <div className="space-y-1">
+        {!isPending && (
+          <div className="space-y-1">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
             <Lightbulb className="size-3 text-amber-400" />
             Improvement Suggestion
           </p>
           <p className="text-xs text-foreground/80 leading-relaxed">{risk.improvement_suggestion}</p>
-        </div>
+          </div>
+        )}
 
         {/* Rulebook findings */}
-        {risk.rulebook_findings.length > 0 && (
+        {!isPending && risk.rulebook_findings.length > 0 && (
           <div className="space-y-1.5">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
               <BookOpen className="size-3 text-blue-400" />

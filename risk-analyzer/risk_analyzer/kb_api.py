@@ -191,18 +191,34 @@ def api_kb_risk_summary(risk_id: int):
             content = data.get("message", {}).get("content", "").strip()
             
             # Post-process to remove conversational prefixes if the model still outputs them
+            # Clean up surrounding quotes
+            content = content.strip().strip('"').strip("'").strip('“').strip('”').strip()
+            
+            # Post-process to remove conversational prefixes if the model still outputs them
             lower_content = content.lower()
             prefixes_to_strip = [
                 "here is a concise summary of the risk factor description in exactly one short sentence:",
+                "here is a concise summary of the risk factor description:",
+                "here is a concise summary of the risk:",
                 "here is a concise summary:",
+                "here is a summary of the risk:",
                 "here is a summary:",
                 "here is the summary:",
+                "the summary is:",
+                "summary of the risk:",
                 "summary:"
             ]
             for prefix in prefixes_to_strip:
                 if lower_content.startswith(prefix):
                     content = content[len(prefix):].strip()
                     break
+            
+            # Strip again in case there were quotes or colons inside the prefix
+            content = content.strip().lstrip(':').strip().strip('"').strip("'").strip('“').strip('”').strip()
+            
+            # Ensure the first letter is capitalized
+            if content and content[0].islower():
+                content = content[0].upper() + content[1:]
                     
             return {"summary": content}
     except Exception as exc:
