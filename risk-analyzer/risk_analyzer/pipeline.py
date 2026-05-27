@@ -9,8 +9,10 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
+import os
 from .classifier import build_risk_records
 from .extractor import RiskAnalyzer
+from .layout_extractor import LayoutRiskExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +101,6 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
 def analyze_pdf(
     pdf_path: Path,
     use_ai: bool = False,
@@ -117,9 +117,17 @@ def analyze_pdf(
     """
     logger.info(f"Processing: {pdf_path}")
 
-    analyzer = RiskAnalyzer(str(pdf_path), use_ai=use_ai)
+    extractor_type = os.environ.get("RISK_EXTRACTOR_TYPE", "layout").lower()
+    if extractor_type == "layout":
+        logger.info("Using LayoutRiskExtractor for analysis...")
+        analyzer = LayoutRiskExtractor(str(pdf_path), use_ai=use_ai)
+    else:
+        logger.info("Using classic RiskAnalyzer for analysis...")
+        analyzer = RiskAnalyzer(str(pdf_path), use_ai=use_ai)
+
     risks = analyzer.run()
     context = analyzer.infer_document_context()
+
     if source_metadata:
         context = {**context, **{k: v for k, v in source_metadata.items() if v is not None}}
     risk_records = build_risk_records(risks, context, use_ai=use_ai)

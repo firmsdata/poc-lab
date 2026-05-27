@@ -107,6 +107,10 @@ class RiskAnalyzer:
         risks_final = self.post_process(risks_raw)
         logger.info(f"Final risk items after post-processing: {len(risks_final)}")
 
+        if self.use_ai:
+            risks_final = self.ai_semantic_filter(risks_final)
+            logger.info(f"Final risk items after semantic filter: {len(risks_final)}")
+
         return risks_final
 
     def infer_document_context(self) -> dict:
@@ -217,6 +221,56 @@ class RiskAnalyzer:
             logger.warning(f"AI TOC extraction failed ({exc}); falling back to regex.")
             return None, None
 
+    def ai_semantic_filter(self, risks: List[str]) -> List[str]:
+        """
+        Final pass: Use AI to semantically validate, merge, and filter the raw risk strings.
+        Discards boilerplate and merges fragmented risks.
+        """
+        try:
+            from langchain_ollama import ChatOllama
+        except ImportError:
+            logger.warning("langchain-ollama not installed; skipping semantic filter.")
+            return risks
+
+        logger.info(f"Running semantic filter on {len(risks)} raw risk chunks in batches...")
+        
+        prompt_template = (
+            "You are a meticulous financial analyst extracting IPO Risk Factors.\n"
+            "Below is a JSON array of strings extracted from a DRHP. Some strings might be fragments "
+            "of a single risk, while others might be non-risk boilerplate (e.g. page headers or general info).\n\n"
+            "Your task is to return a clean JSON array of strings, where each string is a complete, distinct Risk Factor.\n"
+            "- Merge consecutive strings if they belong to the same risk factor.\n"
+            "- Discard strings that are clearly not risk factors (e.g., page numbers, disclaimers, random sentences).\n"
+            "- Do NOT alter the actual text heavily, just merge and filter.\n"
+            "- Return ONLY the raw JSON array (no markdown fences, no preamble).\n\n"
+            "Raw chunks:\n{chunks}"
+        )
+        
+        model = ChatOllama(
+            model=os.environ.get("RISK_AI_MODEL", "llama3"),
+            temperature=0,
+        )
+        
+        batch_size = 10
+        final_risks = []
+        
+        for i in range(0, len(risks), batch_size):
+            batch = risks[i:i + batch_size]
+            prompt = prompt_template.format(chunks=json.dumps(batch, ensure_ascii=False))
+            try:
+                raw = model.invoke(prompt).content.strip()
+                raw = _strip_markdown_fences(raw)
+                filtered_batch = json.loads(raw)
+                if isinstance(filtered_batch, list):
+                    for r in filtered_batch:
+                        if isinstance(r, str) and len(r.strip()) > 20:
+                            final_risks.append(r.strip())
+            except Exception as e:
+                logger.warning(f"Semantic filter failed on batch {i}: {e}. Keeping raw batch.")
+                final_risks.extend(batch)
+                
+        return final_risks
+
     # ------------------------------------------------------------------
     # Page location helpers
     # ------------------------------------------------------------------
@@ -224,11 +278,12 @@ class RiskAnalyzer:
     def locate_actual_page(self, toc_page: int) -> int:
         """
         Find the physical PDF page index that corresponds to the printed page
-        number from the TOC, scanning a ±10 page window for the Risk Factors
-        heading or tell-tale body text.
+        number from the TOC. Since printed page 1 usually starts after the TOC 
+        and front matter, the physical page index is typically greater than 
+        the printed page number. We scan a window of [toc_page - 5] to [toc_page + 60].
         """
-        start_idx = max(0, toc_page - 10)
-        end_idx = min(len(self.doc), toc_page + 10)
+        start_idx = max(0, toc_page - 5)
+        end_idx = min(len(self.doc), toc_page + 60)
         fallback_idx: Optional[int] = None
 
         for idx in range(start_idx, end_idx):
@@ -346,7 +401,7 @@ class RiskAnalyzer:
 
         risks: List[str] = []
         current: List[str] = []
-        expected_number = 1
+        expected_number: Optional[int] = None
 
         def risk_number(block: str) -> Optional[int]:
             first = block.split("\n")[0].strip()
@@ -357,8 +412,8 @@ class RiskAnalyzer:
                 return 1 if re.match(r"^[•\-\*]", first) else None
             # heading_based
             is_heading = (
-                len(first) < 100
-                and (first.istitle() or first.isupper())
+                len(first) < 150  # relaxed length
+                and (first.istitle() or first.isupper() or re.match(r"^[A-Z]", first))
                 and not first.endswith(".")
             )
             return 1 if is_heading else None
@@ -366,6 +421,8 @@ class RiskAnalyzer:
         for block in blocks:
             number = risk_number(block)
             if pattern == "numbered" and number is not None:
+                if expected_number is None:
+                    expected_number = number
                 is_new = number == expected_number or (
                     current and expected_number < number <= expected_number + 2
                 )

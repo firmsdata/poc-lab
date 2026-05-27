@@ -252,6 +252,15 @@ For MySQL, the app uses `schema.mysql.sql`. For PostgreSQL, it uses `schema.sql`
 python main.py path/to/document.pdf --output extracted_risks.json
 ```
 
+The default layout extractor uses PyMuPDF with numbered-sequence validation. For difficult PDFs, install the optional Docling backend and enable it with an environment variable:
+
+```bash
+pip install -r requirements-docling.txt
+RISK_PARSER_BACKEND=docling python main.py path/to/document.pdf --output extracted_risks.json
+```
+
+Use `RISK_PARSER_BACKEND=auto` to keep the fast PyMuPDF path and try heavier parser backends only when the numbered risk sequence has gaps.
+
 ### 5. Start the web app
 
 ```bash

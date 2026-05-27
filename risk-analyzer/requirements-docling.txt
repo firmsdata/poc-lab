@@ -1,0 +1,3 @@
+# Optional robust PDF parser backend.
+# Install only when you want to run RISK_PARSER_BACKEND=docling.
+docling>=2.95.0

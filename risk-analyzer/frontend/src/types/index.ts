@@ -95,13 +95,16 @@ export type Document = {
 }
 
 export type StreamedRisk = {
+  index?: number
   title: string
+  description?: string
   domain: string
   category: string
   quality_rating: QualityRating
   issue: string
   improvement_suggestion: string
   rulebook_findings: string[]
+  feedback_status?: "pending" | "complete"
 }
 
 export type StreamEvent =
@@ -115,6 +118,7 @@ export type StreamEvent =
       total_risks?: number
       section_findings?: unknown[]
       rulebook?: unknown[]
+      risks?: StreamedRisk[]
       message?: string
       percent?: number
     }
